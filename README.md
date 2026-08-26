@@ -20,7 +20,7 @@ The result is the first automaton.
 
 ---
 
-Update: development of Automaton has continued across Conway's internal RL environments for faster iteration & new capabilites. Stay tuned.
+Update: development of Automaton has continued across Conway's internal RL environments for faster iteration & new capabilities. Stay tuned. It's beautiful.
 
 ## Quick Start
 
