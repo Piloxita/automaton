@@ -32,6 +32,14 @@ import type {
 import { ulid } from "ulid";
 import { createLogger } from "../observability/logger.js";
 import type { ChainType } from "../identity/chain.js";
+import {
+  authorizeSpend,
+  settleSpend,
+  releaseSpend,
+  getSpendGuard,
+  estimateGasCents,
+  type SpendAuthorization,
+} from "../survival/spend-guard.js";
 const logger = createLogger("registry.erc8004");
 
 /**
@@ -113,7 +121,7 @@ async function preflight(
     args: any[];
   },
   rpcUrl?: string,
-): Promise<void> {
+): Promise<bigint> {
   const contracts = CONTRACTS[network];
   const chain = contracts.chain;
 
@@ -155,6 +163,32 @@ async function preflight(
       `Insufficient ETH for gas. Balance: ${balance} wei, estimated cost: ${estimatedCost} wei (gas: ${gasEstimate}, price: ${gasPrice} wei)`,
     );
   }
+
+  return estimatedCost;
+}
+
+/**
+ * SpendGuard gate for an on-chain transaction. Gas is converted to cents
+ * conservatively (ETH price x 1.5 when configured, else a fixed per-tx estimate).
+ * Throws when denied; call settleSpend/releaseSpend around the send.
+ */
+async function authorizeGas(
+  estimatedWei: bigint,
+  action: string,
+  to: Address,
+): Promise<Extract<SpendAuthorization, { ok: true }>> {
+  const guard = getSpendGuard();
+  const cents = guard ? estimateGasCents(estimatedWei, guard.policy) : 1;
+  const auth = await authorizeSpend({
+    kind: "gas",
+    amountCents: cents,
+    recipient: to,
+    reason: `ERC-8004 ${action}`,
+  });
+  if (!auth.ok) {
+    throw new Error(`On-chain transaction denied: ${auth.reason}`);
+  }
+  return auth;
 }
 
 // ─── Transaction Logging ────────────────────────────────────────
@@ -236,12 +270,13 @@ export async function registerAgent(
   const rpc = resolveRpcUrl(rpcUrl);
 
   // Phase 3.2: Preflight gas check
-  await preflight(account, network, {
+  const estimatedWei = await preflight(account, network, {
     address: contracts.identity,
     abi: IDENTITY_ABI,
     functionName: "register",
     args: [agentURI],
   }, rpcUrl);
+  const gasAuth = await authorizeGas(estimatedWei, "register", contracts.identity);
 
   const publicClient = createPublicClient({
     chain,
@@ -255,12 +290,19 @@ export async function registerAgent(
   });
 
   // Call register(agentURI)
-  const hash = await walletClient.writeContract({
-    address: contracts.identity,
-    abi: IDENTITY_ABI,
-    functionName: "register",
-    args: [agentURI],
-  });
+  let hash: `0x${string}`;
+  try {
+    hash = await walletClient.writeContract({
+      address: contracts.identity,
+      abi: IDENTITY_ABI,
+      functionName: "register",
+      args: [agentURI],
+    });
+  } catch (err) {
+    releaseSpend(gasAuth, "transaction was not sent");
+    throw err;
+  }
+  settleSpend(gasAuth);
 
   // Phase 3.2: Log pending transaction
   logTransaction(
@@ -323,12 +365,13 @@ export async function updateAgentURI(
   const chain = contracts.chain;
 
   // Phase 3.2: Preflight gas check
-  await preflight(account, network, {
+  const estimatedWei = await preflight(account, network, {
     address: contracts.identity,
     abi: IDENTITY_ABI,
     functionName: "setAgentURI",
     args: [BigInt(agentId), newAgentURI],
   }, rpcUrl);
+  const gasAuth = await authorizeGas(estimatedWei, "setAgentURI", contracts.identity);
 
   const walletClient = createWalletClient({
     account,
@@ -336,12 +379,19 @@ export async function updateAgentURI(
     transport: http(resolveRpcUrl(rpcUrl)),
   });
 
-  const hash = await walletClient.writeContract({
-    address: contracts.identity,
-    abi: IDENTITY_ABI,
-    functionName: "setAgentURI",
-    args: [BigInt(agentId), newAgentURI],
-  });
+  let hash: `0x${string}`;
+  try {
+    hash = await walletClient.writeContract({
+      address: contracts.identity,
+      abi: IDENTITY_ABI,
+      functionName: "setAgentURI",
+      args: [BigInt(agentId), newAgentURI],
+    });
+  } catch (err) {
+    releaseSpend(gasAuth, "transaction was not sent");
+    throw err;
+  }
+  settleSpend(gasAuth);
 
   // Phase 3.2: Log transaction
   logTransaction(
@@ -396,12 +446,13 @@ export async function leaveFeedback(
   const chain = contracts.chain;
 
   // Phase 3.2: Preflight gas check
-  await preflight(account, network, {
+  const estimatedWei = await preflight(account, network, {
     address: contracts.reputation,
     abi: REPUTATION_ABI,
     functionName: "leaveFeedback",
     args: [BigInt(agentId), score, comment],
   }, rpcUrl);
+  const gasAuth = await authorizeGas(estimatedWei, "leaveFeedback", contracts.reputation);
 
   const walletClient = createWalletClient({
     account,
@@ -409,12 +460,19 @@ export async function leaveFeedback(
     transport: http(resolveRpcUrl(rpcUrl)),
   });
 
-  const hash = await walletClient.writeContract({
-    address: contracts.reputation,
-    abi: REPUTATION_ABI,
-    functionName: "leaveFeedback",
-    args: [BigInt(agentId), score, comment],
-  });
+  let hash: `0x${string}`;
+  try {
+    hash = await walletClient.writeContract({
+      address: contracts.reputation,
+      abi: REPUTATION_ABI,
+      functionName: "leaveFeedback",
+      args: [BigInt(agentId), score, comment],
+    });
+  } catch (err) {
+    releaseSpend(gasAuth, "transaction was not sent");
+    throw err;
+  }
+  settleSpend(gasAuth);
 
   // Phase 3.2: Log transaction
   logTransaction(

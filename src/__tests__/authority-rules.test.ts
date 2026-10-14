@@ -594,9 +594,9 @@ describe("Financial Phase 1 Rules", () => {
       const engine = new PolicyEngine(db, rules);
 
       const tool = createMockTool({
-        name: "chat",
-        riskLevel: "safe",
-        category: "conway",
+        name: "write_file",
+        riskLevel: "caution",
+        category: "vm",
       });
       const spendTracker = createMockSpendTracker({
         getDailySpend: (category: SpendCategory) =>

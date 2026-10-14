@@ -6,6 +6,7 @@ import type {
   ConwayClient,
 } from "../types.js";
 import type { AgentTracker, FundingProtocol } from "./types.js";
+import { authorizeSpend, settleSpend, releaseSpend } from "../survival/spend-guard.js";
 
 const IDLE_STATUSES = new Set<ChildStatus>(["running", "healthy"]);
 
@@ -85,30 +86,50 @@ export class SimpleFundingProtocol implements FundingProtocol {
     private readonly db: AutomatonDatabase,
   ) {}
 
-  async fundChild(childAddress: string, amountCents: number): Promise<{ success: boolean }> {
+  async fundChild(childAddress: string, amountCents: number): Promise<{ success: boolean; error?: string }> {
     const transferAmount = Math.max(0, Math.floor(amountCents));
     if (transferAmount === 0) {
       return { success: true };
     }
 
+    // SpendGuard: orchestrator funding is LLM-influenced (task estimates), so it is capped
+    const auth = await authorizeSpend({
+      kind: "orchestrator_fund",
+      amountCents: transferAmount,
+      recipient: childAddress,
+      reason: "Task funding from orchestrator",
+    });
+    if (!auth.ok) {
+      return { success: false, error: auth.reason };
+    }
+
+    let result;
     try {
-      const result = await this.conway.transferCredits(
+      result = await this.conway.transferCredits(
         childAddress,
         transferAmount,
         "Task funding from orchestrator",
       );
-
-      const success = isTransferSuccessful(result.status);
-      if (success) {
-        this.db.raw.prepare(
-          "UPDATE children SET funded_amount_cents = funded_amount_cents + ? WHERE address = ?",
-        ).run(transferAmount, childAddress);
-      }
-
-      return { success };
     } catch {
+      releaseSpend(auth, "transfer API call failed");
       return { success: false };
     }
+
+    const success = isTransferSuccessful(result.status);
+    if (!success) {
+      releaseSpend(auth, `transfer status ${result.status}`);
+      return { success: false };
+    }
+
+    settleSpend(auth, transferAmount);
+    try {
+      this.db.raw.prepare(
+        "UPDATE children SET funded_amount_cents = funded_amount_cents + ? WHERE address = ?",
+      ).run(transferAmount, childAddress);
+    } catch {
+      // bookkeeping only: the transfer already happened and is counted
+    }
+    return { success: true };
   }
 
   async recallCredits(childAddress: string): Promise<{ success: boolean; amountCents: number }> {

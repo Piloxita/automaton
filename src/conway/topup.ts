@@ -15,6 +15,7 @@
 
 import type { PrivateKeyAccount, Address } from "viem";
 import { x402Fetch, getUsdcBalance } from "./x402.js";
+import type { SpendGuard } from "../survival/spend-guard.js";
 import { createLogger } from "../observability/logger.js";
 import type { ChainType } from "../identity/chain.js";
 
@@ -41,13 +42,32 @@ export async function topupCredits(
   account: PrivateKeyAccount,
   amountUsd: number,
   recipientAddress?: Address,
+  guard?: SpendGuard | null,
 ): Promise<TopupResult> {
+  if (!TOPUP_TIERS.includes(amountUsd)) {
+    return {
+      success: false,
+      amountUsd,
+      error: `Invalid topup tier $${amountUsd}. Valid tiers: ${TOPUP_TIERS.join(", ")}`,
+    };
+  }
   const address = recipientAddress || account.address;
   const url = `${apiUrl}/pay/${amountUsd}/${address}`;
 
   logger.info(`Attempting credit topup: $${amountUsd} USD for ${address}`);
 
-  const result = await x402Fetch(url, account, "GET");
+  // x402Fetch authorizes the REAL 402 amount with the SpendGuard (kind "topup");
+  // the tier price is passed as a hard ceiling so a server cannot charge more.
+  const result = await x402Fetch(
+    url,
+    account,
+    "GET",
+    undefined,
+    undefined,
+    amountUsd * 100,
+    undefined,
+    { spendKind: "topup", reason: `credit topup $${amountUsd} for ${address}`, guard },
+  );
 
   if (!result.success) {
     logger.error(`Credit topup failed: ${result.error}`);

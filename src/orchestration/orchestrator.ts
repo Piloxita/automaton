@@ -257,7 +257,7 @@ export class Orchestrator {
 
     const result = await this.params.funding.fundChild(addr, amountCents);
     if (!result.success) {
-      throw new Error(`Funding transfer failed for ${addr}`);
+      throw new Error(`Funding transfer failed for ${addr}${result.error ? `: ${result.error}` : ""}`);
     }
   }
 

@@ -18,6 +18,8 @@ import {
   insertSpendRecord,
   getSpendByWindow,
   pruneSpendRecords,
+  inferenceGetHourlyCost,
+  inferenceGetDailyCost,
 } from "../state/database.js";
 import type { SpendTrackingRow } from "../state/database.js";
 
@@ -58,14 +60,31 @@ export class SpendTracker implements SpendTrackerInterface {
     insertSpendRecord(this.db, row);
   }
 
+  /**
+   * Inference is metered by the inference router into `inference_costs`, not into
+   * spend_tracking, so the "inference" category reads the real meter (plus any
+   * rows recorded directly). A missing table counts as zero.
+   */
+  private meteredInference(kind: "hour" | "day"): number {
+    try {
+      return kind === "hour"
+        ? inferenceGetHourlyCost(this.db)
+        : inferenceGetDailyCost(this.db);
+    } catch {
+      return 0;
+    }
+  }
+
   getHourlySpend(category: SpendCategory): number {
     const window = getCurrentHourWindow();
-    return getSpendByWindow(this.db, category, "hour", window);
+    const recorded = getSpendByWindow(this.db, category, "hour", window);
+    return category === "inference" ? recorded + this.meteredInference("hour") : recorded;
   }
 
   getDailySpend(category: SpendCategory): number {
     const window = getCurrentDayWindow();
-    return getSpendByWindow(this.db, category, "day", window);
+    const recorded = getSpendByWindow(this.db, category, "day", window);
+    return category === "inference" ? recorded + this.meteredInference("day") : recorded;
   }
 
   getTotalSpend(category: SpendCategory, since: Date): number {
@@ -77,7 +96,15 @@ export class SpendTracker implements SpendTrackerInterface {
         `SELECT COALESCE(SUM(amount_cents), 0) as total FROM spend_tracking WHERE category = ? AND created_at >= ?`,
       )
       .get(category, sinceStr) as { total: number };
-    return row.total;
+    if (category !== "inference") return row.total;
+    try {
+      const metered = this.db
+        .prepare("SELECT COALESCE(SUM(cost_cents), 0) as total FROM inference_costs WHERE created_at >= ?")
+        .get(sinceStr) as { total: number };
+      return row.total + metered.total;
+    } catch {
+      return row.total;
+    }
   }
 
   checkLimit(
@@ -95,10 +122,9 @@ export class SpendTracker implements SpendTrackerInterface {
       limitHourly = limits.maxHourlyTransferCents;
       limitDaily = limits.maxDailyTransferCents;
     } else if (category === "x402") {
-      // x402 payments have their own per-payment cap; use a reasonable
-      // hourly/daily envelope derived from the per-payment maximum
-      limitHourly = limits.maxX402PaymentCents * 10;
-      limitDaily = limits.maxX402PaymentCents * 50;
+      // x402 hourly/daily envelope comes from the treasury policy
+      limitHourly = limits.maxX402HourlyCents;
+      limitDaily = limits.maxX402DailyCents;
     } else {
       // Derive a meaningful hourly cap from the daily budget.
       // Without this, the entire daily budget could be consumed in one hour.

@@ -578,6 +578,27 @@ export interface TreasuryPolicy {
   maxTransfersPerTurn: number;
   maxInferenceDailyCents: number;
   requireConfirmationAboveCents: number;
+  /** x402 envelope (hourly/daily USDC spend on paid API calls). */
+  maxX402HourlyCents: number;
+  maxX402DailyCents: number;
+  /** USDC -> credits purchases (topup_credits, bootstrap and auto top-ups). */
+  maxTopupSingleCents: number;
+  maxTopupHourlyCents: number;
+  maxTopupDailyCents: number;
+  /** Minimum USDC left in the wallet after a topup (0 lets survival topups run). */
+  minimumUsdcReserveCents: number;
+  /** Credits sent to children (fund_child + orchestrator task funding share these). */
+  maxChildFundingSingleCents: number;
+  maxChildFundingHourlyCents: number;
+  maxChildFundingDailyCents: number;
+  /** On-chain gas (ERC-8004 registry transactions), in cents. */
+  maxGasSingleCents: number;
+  maxGasHourlyCents: number;
+  maxGasDailyCents: number;
+  /** Fixed per-transaction gas estimate used when the ETH price is unknown. */
+  gasCostEstimateCents: number;
+  /** ETH price in cents; 0 = unknown (use gasCostEstimateCents). */
+  ethPriceCents: number;
 }
 
 export const DEFAULT_TREASURY_POLICY: TreasuryPolicy = {
@@ -591,6 +612,20 @@ export const DEFAULT_TREASURY_POLICY: TreasuryPolicy = {
   maxTransfersPerTurn: 2,
   maxInferenceDailyCents: 50000,
   requireConfirmationAboveCents: 1000,
+  maxX402HourlyCents: 1000,
+  maxX402DailyCents: 5000,
+  maxTopupSingleCents: 2500,
+  maxTopupHourlyCents: 5000,
+  maxTopupDailyCents: 10000,
+  minimumUsdcReserveCents: 0,
+  maxChildFundingSingleCents: 2000,
+  maxChildFundingHourlyCents: 5000,
+  maxChildFundingDailyCents: 10000,
+  maxGasSingleCents: 200,
+  maxGasHourlyCents: 500,
+  maxGasDailyCents: 1000,
+  gasCostEstimateCents: 25,
+  ethPriceCents: 0,
 };
 
 // ─── Phase 1: Inbox Message Status ──────────────────────────────
