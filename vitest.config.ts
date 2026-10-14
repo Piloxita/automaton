@@ -5,6 +5,7 @@ export default defineConfig({
     testTimeout: 30_000,
     teardownTimeout: 5_000,
     include: ["src/__tests__/**/*.test.ts"],
+    globalSetup: ["src/__tests__/global-tmpdir.ts"],
     coverage: {
       provider: "v8",
       include: ["src/**/*.ts"],

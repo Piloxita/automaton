@@ -146,7 +146,7 @@ describe("readSelfhostedBalanceCents", () => {
   it("never reports zero on RPC failure — keeps the last known reading and flags it unknown", async () => {
     x402Mocks.getUsdcBalanceDetailed.mockResolvedValueOnce({ balance: 5, network: "eip155:8453", ok: true });
     const first = await readSelfhostedBalanceCents(ADDRESS);
-    expect(first).toEqual({ cents: 500, known: true });
+    expect(first).toMatchObject({ cents: 500, known: true, usdcCents: 500 });
 
     x402Mocks.getUsdcBalanceDetailed.mockResolvedValueOnce({
       balance: 0,
@@ -162,7 +162,7 @@ describe("readSelfhostedBalanceCents", () => {
   it("reports 0 (not death-triggering by itself) with known:false when there has never been a successful read", async () => {
     x402Mocks.getUsdcBalanceDetailed.mockResolvedValueOnce({ balance: 0, network: "eip155:8453", ok: false });
     const reading = await readSelfhostedBalanceCents(ADDRESS);
-    expect(reading).toEqual({ cents: 0, known: false });
+    expect(reading).toMatchObject({ cents: 0, known: false });
   });
 });
 
@@ -575,5 +575,34 @@ describe("loadConfig in self-hosted mode", () => {
       process.env.HOME = prevHome;
       fs.rmSync(home, { recursive: true, force: true });
     }
+  });
+});
+
+describe("inference credit counts toward the self-hosted balance", () => {
+  afterEach(() => resetSelfhostedBalanceCacheForTests());
+
+  it("reads OpenRouter limit_remaining for the configured key", async () => {
+    const { setInferenceCreditSource, readInferenceCreditCents } = await import("../survival/selfhosted-balance.js");
+    process.env.TEST_OR_KEY = "sk-or-test";
+    setInferenceCreditSource({ baseUrl: "https://openrouter.ai/api", apiKeyEnv: "TEST_OR_KEY" });
+    const fetchFn = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      expect((init?.headers as Record<string, string>).Authorization).toBe("Bearer sk-or-test");
+      return new Response(JSON.stringify({ data: { limit_remaining: 9.876 } }), { status: 200 });
+    });
+    expect(await readInferenceCreditCents(fetchFn as unknown as typeof fetch)).toBe(987);
+    delete process.env.TEST_OR_KEY;
+  });
+
+  it("ignores non-OpenRouter endpoints and keys without a limit", async () => {
+    const { setInferenceCreditSource, readInferenceCreditCents } = await import("../survival/selfhosted-balance.js");
+    process.env.TEST_OR_KEY = "k";
+    setInferenceCreditSource({ baseUrl: "https://evil.example/openrouter.ai", apiKeyEnv: "TEST_OR_KEY" });
+    const never = vi.fn();
+    expect(await readInferenceCreditCents(never as unknown as typeof fetch)).toBe(0);
+    expect(never).not.toHaveBeenCalled();
+    setInferenceCreditSource({ baseUrl: "https://openrouter.ai/api", apiKeyEnv: "TEST_OR_KEY" });
+    const unlimited = vi.fn(async () => new Response(JSON.stringify({ data: { limit_remaining: null } }), { status: 200 }));
+    expect(await readInferenceCreditCents(unlimited as unknown as typeof fetch)).toBe(0);
+    delete process.env.TEST_OR_KEY;
   });
 });

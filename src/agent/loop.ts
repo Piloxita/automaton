@@ -1101,7 +1101,7 @@ async function getSelfhostedFinancialState(
 ): Promise<FinancialState> {
   const reading = await readSelfhostedBalanceCents(address, chainType as any);
   const creditsCents = reading.cents;
-  const usdcBalance = creditsCents / 100;
+  const usdcBalance = reading.usdcCents / 100;
 
   if (db) {
     try {

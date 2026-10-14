@@ -326,6 +326,8 @@ async function run(): Promise<void> {
   const modelRegistry = new ModelRegistry(db.raw);
   modelRegistry.initialize();
   if (isSelfHosted(config)) {
+    const { setInferenceCreditSource } = await import("./survival/selfhosted-balance.js");
+    setInferenceCreditSource(config.openaiCompatible);
     configureSelfhostedModels(modelRegistry, config);
   }
   const inference = createInferenceClient({
