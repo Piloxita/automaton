@@ -1,0 +1,6 @@
+{
+  "name": "Piloxita-Automaton-1",
+  "creatorAddress": "0x606B304eE4F1ce1546632DDAD3b7b5b122647729",
+  "genesisFile": "/setup/genesis.md",
+  "upstreamRepoUrl": "https://github.com/Piloxita/automaton.git"
+}

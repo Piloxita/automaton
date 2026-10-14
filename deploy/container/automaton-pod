@@ -2,6 +2,7 @@
 # Creator-side control for the contained automaton (rootless podman).
 #   automaton-pod build     build the image from this checkout
 #   automaton-pod setup     interactive first-run wizard (wallet, name, genesis prompt)
+#   automaton-pod setup-headless  same, from deploy/container/instance/{params.json,genesis.md}
 #   automaton-pod start     run detached (restarts on exit)
 #   automaton-pod stop | logs | status | shell | wallet
 # State lives in two named volumes: automaton-app (its code, which it edits)
@@ -24,11 +25,13 @@ RUN_OPTS=(
 case "${1:-}" in
   build) podman build -t "$IMAGE" -f "$REPO/deploy/container/Containerfile" "$REPO" ;;
   setup) podman run --rm -it "${RUN_OPTS[@]}" "$IMAGE" node dist/index.js --setup ;;
+  setup-headless) podman run --rm "${RUN_OPTS[@]}" -v "$REPO/deploy/container/instance:/setup:ro" "$IMAGE" \
+           node deploy/container/headless-setup.mjs /setup/params.json ;;
   start) podman run -d --name "$NAME" --restart unless-stopped "${RUN_OPTS[@]}" "$IMAGE" ;;
   stop)  podman stop "$NAME" && podman rm "$NAME" ;;
   logs)  podman logs --tail "${2:-100}" -f "$NAME" ;;
   status) podman ps -a --filter name="$NAME"; podman exec "$NAME" node dist/index.js --status 2>/dev/null || true ;;
   shell) podman exec -it "$NAME" bash ;;
   wallet) podman run --rm "${RUN_OPTS[@]}" "$IMAGE" node dist/index.js --status | grep -iE "address|wallet|credits|usdc" || echo "no wallet yet: run setup" ;;
-  *) sed -n '2,9p' "$0"; exit 1 ;;
+  *) sed -n '2,10p' "$0"; exit 1 ;;
 esac
