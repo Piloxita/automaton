@@ -1,0 +1,17 @@
+# The whole automaton in a disposable container: it may edit and rebuild its
+# own code here. The container and the wallet balance are the boundary.
+FROM docker.io/library/node:22-bookworm-slim
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends git ca-certificates curl python3 make g++ jq \
+ && rm -rf /var/lib/apt/lists/* \
+ && corepack enable && corepack prepare pnpm@10.28.1 --activate
+
+WORKDIR /app
+COPY . /app
+RUN pnpm install --frozen-lockfile && pnpm build \
+ && git config --global user.name automaton && git config --global user.email automaton@localhost \
+ && git config --global --add safe.directory /app
+
+ENV AUTOMATON_CONTAINED=1 HOME=/root NODE_ENV=production
+CMD ["/app/deploy/container/entrypoint.sh"]

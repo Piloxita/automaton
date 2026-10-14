@@ -232,12 +232,69 @@ function expandHome(filePath: string): string {
 }
 
 /**
+ * Contained self-modification profile.
+ *
+ * When the whole automaton runs inside a disposable container (see
+ * deploy/container/), the container and the wallet balance are the real
+ * boundary: code the agent writes runs in-process, so a file protection list
+ * cannot stop it anyway. In that profile the agent may edit its own source,
+ * including tools and the agent loop, through the audited edit path. Only the
+ * constitution, its identity/config/wallet files and generated or vendored
+ * trees stay protected.
+ *
+ * Enabled only when the creator's run script sets AUTOMATON_CONTAINED=1 AND a
+ * container runtime marker exists, so it can never switch on for a host install.
+ */
+export function isContainedProfile(
+  env: NodeJS.ProcessEnv = process.env,
+  exists: (p: string) => boolean = fs.existsSync,
+): boolean {
+  return env.AUTOMATON_CONTAINED === "1" && (exists("/run/.containerenv") || exists("/.dockerenv"));
+}
+
+const CONTAINED_PROTECTED_NAMES: readonly string[] = Object.freeze([
+  "constitution.md",
+  "constitution.sha256",
+  "automaton.json",
+  "wallet.json",
+  "SOUL.md",
+]);
+
+const CONTAINED_PROTECTED_REPO_PATHS: readonly string[] = Object.freeze([
+  "constitution.md",
+  ".git/",
+  "dist/",
+  "node_modules/",
+]);
+
+/**
  * Check if a file path is protected from modification.
  * `repoRoot` is overridable for tests; production uses the package root.
  */
-export function isProtectedFile(filePath: string, repoRoot: string = REPO_ROOT): boolean {
+export function isProtectedFile(
+  filePath: string,
+  repoRoot: string = REPO_ROOT,
+  contained: boolean = isContainedProfile(),
+): boolean {
   const resolved = path.resolve(expandHome(filePath));
   const real = realpathLoose(resolved);
+
+  if (contained) {
+    for (const candidate of new Set([resolved, real])) {
+      if (CONTAINED_PROTECTED_NAMES.includes(path.basename(candidate))) return true;
+    }
+    const containedRel = path.relative(realpathLoose(repoRoot), real);
+    if (containedRel !== "" && !containedRel.startsWith("..") && !path.isAbsolute(containedRel)) {
+      const segs = containedRel.split(path.sep);
+      for (const entry of CONTAINED_PROTECTED_REPO_PATHS) {
+        const entrySegs = entry.split("/").filter(Boolean);
+        if (segs.length < entrySegs.length) continue;
+        if (!entrySegs.every((seg, i) => segs[i] === seg)) continue;
+        if (entry.endsWith("/") || segs.length === entrySegs.length) return true;
+      }
+    }
+    return false;
+  }
 
   // Both the literal path and the symlink-resolved path are checked, so a
   // symlink pointing at a protected file cannot be used as a write path.
