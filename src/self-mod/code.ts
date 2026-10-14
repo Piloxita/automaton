@@ -15,6 +15,7 @@
 
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 import type {
   ConwayClient,
   AutomatonDatabase,
@@ -77,6 +78,51 @@ const PROTECTED_FILES: readonly string[] = Object.freeze([
   "agent/policy-rules/index.ts",
   "agent/policy-rules/index.js",
 ]);
+
+/**
+ * Paths inside the repo (relative to the repo root) that enforce limits.
+ * A trailing "/" protects the whole directory tree; otherwise the entry is an
+ * exact file. Matching is done on the realpath, relative to the repo root,
+ * segment by segment, for both the TypeScript sources and the compiled dist/.
+ */
+const PROTECTED_REPO_PATHS: readonly string[] = Object.freeze([
+  "src/agent/policy-engine.ts",
+  "src/agent/policy-rules/",
+  "src/agent/injection-defense.ts",
+  "src/agent/loop.ts",
+  "src/agent/tools.ts",
+  "src/config.ts",
+  "src/conway/x402.ts",
+  "src/conway/topup.ts",
+  "src/conway/client.ts",
+  "src/sandbox/",
+  "src/survival/",
+  "src/self-mod/",
+  "src/replication/",
+  "src/identity/",
+  "src/skills/",
+  "src/types.ts",
+  "src/index.ts",
+  "constitution.md",
+  "package.json",
+  "package-lock.json",
+  "pnpm-lock.yaml",
+  "pnpm-workspace.yaml",
+  "yarn.lock",
+  ".npmrc",
+  "tsconfig.json",
+  ".github/",
+  "scripts/",
+  "dist/",
+  "node_modules/",
+  ".git/",
+]);
+
+const REPO_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+);
 
 /**
  * Directory patterns that are completely off-limits.
@@ -152,33 +198,86 @@ function resolveAndValidatePath(filePath: string): string | null {
   }
 }
 
+const CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
+
+function foldCase(p: string): string {
+  return CASE_INSENSITIVE_FS ? p.toLowerCase() : p;
+}
+
+/**
+ * Realpath that also works for files that do not exist yet: resolve the
+ * deepest existing ancestor through symlinks, then re-append the remainder.
+ */
+function realpathLoose(p: string): string {
+  let current = path.resolve(p);
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      const real = fs.realpathSync(current);
+      return tail.length ? path.join(real, ...tail.reverse()) : real;
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return path.resolve(p);
+      tail.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+function expandHome(filePath: string): string {
+  if (filePath === "~" || filePath.startsWith("~/")) {
+    return path.join(process.env.HOME || "/root", filePath.slice(1));
+  }
+  return filePath;
+}
+
 /**
  * Check if a file path is protected from modification.
+ * `repoRoot` is overridable for tests; production uses the package root.
  */
-export function isProtectedFile(filePath: string): boolean {
-  const resolved = path.resolve(filePath);
+export function isProtectedFile(filePath: string, repoRoot: string = REPO_ROOT): boolean {
+  const resolved = path.resolve(expandHome(filePath));
+  const real = realpathLoose(resolved);
 
-  // Check against protected file patterns using path-segment matching
-  for (const pattern of PROTECTED_FILES) {
-    const patternResolved = path.resolve(pattern);
-    // Exact match on resolved paths
-    if (resolved === patternResolved) return true;
-    // Match by path suffix: the resolved path ends with /pattern
-    if (resolved.endsWith(path.sep + pattern)) return true;
-    // Also check multi-segment patterns (e.g., "self-mod/code.ts")
-    if (pattern.includes("/") && resolved.endsWith(path.sep + pattern.replace(/\//g, path.sep))) return true;
+  // Both the literal path and the symlink-resolved path are checked, so a
+  // symlink pointing at a protected file cannot be used as a write path.
+  for (const candidate of new Set([resolved, real])) {
+    // Check against protected file patterns using path-segment matching
+    for (const pattern of PROTECTED_FILES) {
+      const patternResolved = path.resolve(pattern);
+      // Exact match on resolved paths
+      if (candidate === patternResolved) return true;
+      // Match by path suffix: the resolved path ends with /pattern
+      if (candidate.endsWith(path.sep + pattern)) return true;
+      // Also check multi-segment patterns (e.g., "self-mod/code.ts")
+      if (pattern.includes("/") && candidate.endsWith(path.sep + pattern.replace(/\//g, path.sep))) return true;
+    }
+  }
+
+  // Repo-relative protection on the realpath
+  const realRoot = realpathLoose(repoRoot);
+  const rel = path.relative(foldCase(realRoot), foldCase(real));
+  if (rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel)) {
+    const relSegs = rel.split(path.sep);
+    for (const entry of PROTECTED_REPO_PATHS) {
+      const isDir = entry.endsWith("/");
+      const entrySegs = foldCase(entry).split("/").filter(Boolean);
+      if (relSegs.length < entrySegs.length) continue;
+      if (!entrySegs.every((seg, i) => relSegs[i] === seg)) continue;
+      if (isDir || relSegs.length === entrySegs.length) return true;
+    }
   }
 
   // Check against blocked directory patterns using path-segment matching
   for (const pattern of BLOCKED_DIRECTORY_PATTERNS) {
     // Check if any path segment matches the blocked directory
-    if (resolved.includes(path.sep + pattern + path.sep) ||
-        resolved.endsWith(path.sep + pattern) ||
-        resolved === pattern) {
+    if (real.includes(path.sep + pattern + path.sep) ||
+        real.endsWith(path.sep + pattern) ||
+        real === pattern) {
       return true;
     }
     // Handle absolute patterns like /etc/systemd
-    if (pattern.startsWith("/") && resolved.startsWith(pattern)) {
+    if (pattern.startsWith("/") && real.startsWith(pattern)) {
       return true;
     }
   }

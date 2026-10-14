@@ -275,9 +275,11 @@ export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
 
   check_for_updates: async (_ctx: TickContext, taskCtx: HeartbeatLegacyContext) => {
     try {
-      const { checkUpstream, getRepoInfo } = await import("../self-mod/upstream.js");
+      const { checkUpstream, getRepoInfo, resolveUpstream } = await import("../self-mod/upstream.js");
+      const resolved = resolveUpstream(taskCtx.config);
+      if ("error" in resolved) return { shouldWake: false };
       const repo = getRepoInfo();
-      const upstream = checkUpstream();
+      const upstream = checkUpstream(resolved.target);
       taskCtx.db.setKV("upstream_status", JSON.stringify({
         ...upstream,
         ...repo,
@@ -291,7 +293,7 @@ export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
           taskCtx.db.setKV("upstream_prev_behind", behindStr);
           return {
             shouldWake: true,
-            message: `${upstream.behind} new commit(s) on origin/main. Review with review_upstream_changes, then cherry-pick what you want with pull_upstream.`,
+            message: `${upstream.behind} new commit(s) on the configured upstream. Review with review_upstream_changes, then cherry-pick what you want with pull_upstream.`,
           };
         }
       } else {

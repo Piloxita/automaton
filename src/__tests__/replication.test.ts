@@ -101,6 +101,13 @@ describe("spawnChild", () => {
   const validAddress = "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
   const zeroAddress = "0x" + "0".repeat(40);
 
+  // spawnChild now refuses to run at all (fail-closed) unless the creator has
+  // configured an upstream repo to clone children from (authority.md item D:
+  // replication must never fall back to a hardcoded/unpinned repo). These
+  // tests exercise wallet-validation and cleanup behaviour *after* that
+  // check, so they need a valid upstream configured.
+  const spawnOptions = { config: { upstreamRepoUrl: "https://example.test/automaton.git" } };
+
   beforeEach(() => {
     conway = new MockConwayClient();
     db = createTestDb();
@@ -119,7 +126,7 @@ describe("spawnChild", () => {
       return { stdout: "ok", stderr: "", exitCode: 0 };
     });
 
-    const child = await spawnChild(conway, identity, db, genesis);
+    const child = await spawnChild(conway, identity, db, genesis, undefined, spawnOptions);
 
     expect(child.address).toBe(validAddress);
     expect(child.status).toBe("spawning");
@@ -133,7 +140,7 @@ describe("spawnChild", () => {
       return { stdout: "ok", stderr: "", exitCode: 0 };
     });
 
-    await expect(spawnChild(conway, identity, db, genesis))
+    await expect(spawnChild(conway, identity, db, genesis, undefined, spawnOptions))
       .rejects.toThrow("Child wallet address invalid");
   });
 
@@ -145,7 +152,7 @@ describe("spawnChild", () => {
       return { stdout: "ok", stderr: "", exitCode: 0 };
     });
 
-    await expect(spawnChild(conway, identity, db, genesis))
+    await expect(spawnChild(conway, identity, db, genesis, undefined, spawnOptions))
       .rejects.toThrow("Child wallet address invalid");
   });
 
@@ -155,7 +162,7 @@ describe("spawnChild", () => {
     // Make the first exec (apt-get install) fail
     vi.spyOn(conway, "exec").mockRejectedValue(new Error("Install failed"));
 
-    await expect(spawnChild(conway, identity, db, genesis))
+    await expect(spawnChild(conway, identity, db, genesis, undefined, spawnOptions))
       .rejects.toThrow();
 
     // Sandbox deletion is disabled — should not attempt cleanup
@@ -172,7 +179,7 @@ describe("spawnChild", () => {
       return { stdout: "ok", stderr: "", exitCode: 0 };
     });
 
-    await expect(spawnChild(conway, identity, db, genesis))
+    await expect(spawnChild(conway, identity, db, genesis, undefined, spawnOptions))
       .rejects.toThrow("Child wallet address invalid");
 
     // Sandbox deletion is disabled — should not attempt cleanup
@@ -186,7 +193,7 @@ describe("spawnChild", () => {
     vi.spyOn(conway, "exec").mockRejectedValue(new Error("Install failed"));
 
     // Original error should propagate, not the deleteSandbox error
-    await expect(spawnChild(conway, identity, db, genesis))
+    await expect(spawnChild(conway, identity, db, genesis, undefined, spawnOptions))
       .rejects.toThrow(/Install failed/);
   });
 
@@ -194,7 +201,7 @@ describe("spawnChild", () => {
     const deleteSpy = vi.spyOn(conway, "deleteSandbox");
     vi.spyOn(conway, "createSandbox").mockRejectedValue(new Error("Sandbox creation failed"));
 
-    await expect(spawnChild(conway, identity, db, genesis))
+    await expect(spawnChild(conway, identity, db, genesis, undefined, spawnOptions))
       .rejects.toThrow("Sandbox creation failed");
 
     expect(deleteSpy).not.toHaveBeenCalled();

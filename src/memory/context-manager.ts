@@ -128,6 +128,40 @@ function formatCacheKey(text: string, model?: string): string {
   return `${model ?? "default"}::${text}`;
 }
 
+// js-tiktoken's BPE encode is superlinear (closer to quadratic) in the
+// length of its input, independent of chunking: merging happens one pair at
+// a time, so each extra character can cost an extra full pass. Chunking
+// alone (a prior fix attempt) only turns "quadratic in the whole text" into
+// "quadratic in the chunk size, repeated once per chunk" - total work still
+// grows linearly with input length, which is still unbounded and is exactly
+// what let a single oversized tool result or turn (attacker-controlled,
+// hundreds of KB) hang the whole process for minutes.
+//
+// Token counting here only feeds a *budget estimate* (truncation/compression
+// decisions), not exact billing, so instead we bound total CPU work to a
+// small constant: tokenize a fixed-size prefix exactly and extrapolate the
+// tokens-per-character ratio across the rest of the text. For text at or
+// under the sample size this is exact (no extrapolation needed).
+const ENCODE_CHUNK_CHARS = 500;
+const ENCODE_MAX_SAMPLE_CHUNKS = 10;
+const ENCODE_SAMPLE_CHARS = ENCODE_CHUNK_CHARS * ENCODE_MAX_SAMPLE_CHUNKS; // 5,000 chars
+
+function encodeBounded(encoder: Tiktoken, text: string): number {
+  const total = text.length;
+  const sampleChars = Math.min(total, ENCODE_SAMPLE_CHARS);
+
+  let sampleTokens = 0;
+  for (let i = 0; i < sampleChars; i += ENCODE_CHUNK_CHARS) {
+    sampleTokens += encoder.encode(text.slice(i, i + ENCODE_CHUNK_CHARS)).length;
+  }
+
+  if (sampleChars >= total) return sampleTokens;
+  // Extrapolate: the sample's tokens-per-character ratio applied to the
+  // full length. Good enough for budget estimation; never re-encodes the
+  // remainder, so cost stays bounded regardless of how large `text` is.
+  return Math.ceil((sampleTokens / sampleChars) * total);
+}
+
 export function createTokenCounter(): TokenCounter {
   const cache = new Map<string, number>();
   let encoder: Tiktoken | null = null;
@@ -152,7 +186,7 @@ export function createTokenCounter(): TokenCounter {
     let count: number;
     if (encoder) {
       try {
-        count = encoder.encode(normalizedText).length;
+        count = encodeBounded(encoder, normalizedText);
       } catch {
         count = Math.ceil(normalizedText.length / 3.5);
       }
