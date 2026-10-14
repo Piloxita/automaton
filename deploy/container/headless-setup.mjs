@@ -13,17 +13,23 @@ import { DEFAULT_TREASURY_POLICY } from "../../dist/types.js";
 const params = JSON.parse(fs.readFileSync(process.argv[2], "utf-8"));
 const genesisPrompt = fs.readFileSync(params.genesisFile, "utf-8").trim();
 const dir = getAutomatonDir();
+const selfHosted = params.hostingMode === "selfhosted";
 
 const { chainIdentity, isNew } = await getWallet("evm");
 const walletAddress = chainIdentity.address;
 console.log(`wallet ${isNew ? "created" : "loaded"}: ${walletAddress}`);
 
 let apiKey = "";
-try {
-  apiKey = (await provision()).apiKey;
-  console.log("conway api key provisioned");
-} catch (err) {
-  console.log(`conway api key NOT provisioned: ${err.message}`);
+if (selfHosted) {
+  // Self-hosted mode has no Conway dependency at all: skip provisioning.
+  console.log("self-hosted mode: skipping Conway API key provisioning");
+} else {
+  try {
+    apiKey = (await provision()).apiKey;
+    console.log("conway api key provisioned");
+  } catch (err) {
+    console.log(`conway api key NOT provisioned: ${err.message}`);
+  }
 }
 
 const config = createConfig({
@@ -40,6 +46,18 @@ const config = createConfig({
 // The container is the sandbox; bwrap does not nest under rootless podman.
 config.localExecMode = "unsafe-host";
 if (params.upstreamRepoUrl) config.upstreamRepoUrl = params.upstreamRepoUrl;
+
+if (selfHosted) {
+  config.hostingMode = "selfhosted";
+  config.openaiCompatible = params.openaiCompatible;
+  // No conwayApiKey, no social relay (createConfig() leaves socialRelayUrl
+  // unset already — this mode has no Conway dependency at all).
+  console.log(
+    `self-hosted: ${params.openaiCompatible?.baseUrl ?? "(no openaiCompatible configured)"} ` +
+      `via $${params.openaiCompatible?.apiKeyEnv ?? "?"}, ${params.openaiCompatible?.models?.length ?? 0} model(s) configured`,
+  );
+}
+
 saveConfig(config);
 writeDefaultHeartbeatConfig();
 

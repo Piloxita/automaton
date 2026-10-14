@@ -99,6 +99,32 @@ export interface AutomatonConfig {
   /** update_soul limits. Defaults: 8000 bytes per update, 5 updates per hour. */
   soulMaxContentBytes?: number;
   soulMaxUpdatesPerHour?: number;
+  /**
+   * Hosting mode. "conway" (default): use Conway's hosted API for sandboxes,
+   * credits, inference and the social relay. "selfhosted": no Conway dependency
+   * at all — the agent runs in its own container, pays for inference from a
+   * capped OpenAI-compatible key (see `openaiCompatible`), and tracks survival
+   * by its own on-chain USDC balance instead of a Conway credits balance.
+   */
+  hostingMode?: "conway" | "selfhosted";
+  /**
+   * OpenAI-compatible inference backend for self-hosted mode (e.g. OpenRouter).
+   * The API key is read at runtime from `process.env[apiKeyEnv]` — never stored
+   * in config. `baseUrl` is the host root; `/v1/chat/completions` is appended.
+   */
+  openaiCompatible?: {
+    baseUrl: string;
+    apiKeyEnv: string;
+    models: Array<{
+      id: string;
+      /** Minimum survival tier this model is used for. Default: "default" (normal tier). */
+      tier?: "default" | "low_compute" | "critical";
+      costPer1kInputCents: number;
+      costPer1kOutputCents: number;
+      contextWindow?: number;
+      maxOutputTokens?: number;
+    }>;
+  };
 }
 
 export const DEFAULT_CONFIG: Partial<AutomatonConfig> = {
@@ -944,6 +970,13 @@ export interface TickContext {
   tickId: string;                    // ULID, unique per tick
   startedAt: Date;
   creditBalance: number;             // fetched once per tick (cents)
+  /**
+   * False when creditBalance came from a cache/last-known value because the
+   * live read failed (e.g. an RPC failure in self-hosted mode). Undefined or
+   * true means the value is a fresh, live reading. Consumers MUST NOT treat an
+   * unknown reading as proof of a zero balance (never trigger death on it).
+   */
+  creditBalanceKnown?: boolean;
   usdcBalance: number;               // fetched once per tick
   survivalTier: SurvivalTier;
   lowComputeMultiplier: number;      // from config
@@ -1203,7 +1236,7 @@ export const DEFAULT_MEMORY_BUDGET: MemoryBudget = {
 
 // === Phase 2.3: Inference & Model Strategy Types ===
 
-export type ModelProvider = "openai" | "anthropic" | "conway" | "ollama" | "other";
+export type ModelProvider = "openai" | "anthropic" | "conway" | "ollama" | "openai_compatible" | "other";
 
 export type InferenceTaskType =
   | "agent_turn"

@@ -6,7 +6,7 @@
  */
 
 import type BetterSqlite3 from "better-sqlite3";
-import type { ModelEntry, ModelRegistryRow } from "../types.js";
+import type { AutomatonConfig, ModelEntry, ModelRegistryRow } from "../types.js";
 import { STATIC_MODEL_BASELINE } from "./types.js";
 import {
   modelRegistryUpsert,
@@ -72,6 +72,7 @@ export class ModelRegistry {
         !baselineIds.has(existing.modelId) &&
         existing.enabled &&
         existing.provider !== "ollama" &&
+        existing.provider !== "openai_compatible" &&
         existing.provider !== "other"
       ) {
         modelRegistrySetEnabled(this.db, existing.modelId, false);
@@ -167,6 +168,16 @@ export class ModelRegistry {
     return { input: entry.costPer1kInput, output: entry.costPer1kOutput };
   }
 
+  /** Disable every enabled model from a provider self-hosted mode has no key for. */
+  disableProviders(providers: string[]): void {
+    const toDisable = new Set(providers);
+    for (const entry of this.getAll()) {
+      if (toDisable.has(entry.provider) && entry.enabled) {
+        this.setEnabled(entry.modelId, false);
+      }
+    }
+  }
+
   private rowToEntry(row: ModelRegistryRow): ModelEntry {
     return {
       modelId: row.modelId,
@@ -186,4 +197,46 @@ export class ModelRegistry {
       updatedAt: row.updatedAt,
     };
   }
+}
+
+/**
+ * Register creator-configured OpenAI-compatible models (self-hosted mode)
+ * into the registry, priced and tiered from config, and disable the
+ * OpenAI/Anthropic/Conway baseline models so the router's routing-matrix
+ * candidates (gpt-5.2 etc., which self-hosted mode has no key for) are
+ * skipped in favor of the models registered here.
+ */
+export function configureSelfhostedModels(
+  registry: ModelRegistry,
+  config: Pick<AutomatonConfig, "openaiCompatible">,
+): void {
+  const models = config.openaiCompatible?.models ?? [];
+  if (models.length === 0) return;
+
+  const now = new Date().toISOString();
+  for (const m of models) {
+    const tierMinimum =
+      m.tier === "critical" ? "critical" : m.tier === "low_compute" ? "low_compute" : "normal";
+    registry.upsert({
+      modelId: m.id,
+      provider: "openai_compatible",
+      displayName: m.id,
+      tierMinimum,
+      // Config is cents per 1k tokens; the registry stores hundredths of a
+      // cent per 1k tokens (see STATIC_MODEL_BASELINE comments), hence x100.
+      costPer1kInput: Math.round(m.costPer1kInputCents * 100),
+      costPer1kOutput: Math.round(m.costPer1kOutputCents * 100),
+      maxTokens: m.maxOutputTokens ?? 4096,
+      contextWindow: m.contextWindow ?? 128_000,
+      supportsTools: true,
+      supportsVision: false,
+      parameterStyle: "max_tokens",
+      enabled: true,
+      lastSeen: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+
+  registry.disableProviders(["openai", "anthropic", "conway"]);
 }

@@ -22,6 +22,13 @@ RUN_OPTS=(
   -v automaton-home:/root/.automaton
 )
 
+# Self-hosted mode's capped OpenRouter key (OPENROUTER_API_KEY=...), never
+# baked into the image or params.json. Picked up automatically if present.
+OPENROUTER_ENV_FILE="$HOME/.config/automaton-creator/openrouter.env"
+if [ -f "$OPENROUTER_ENV_FILE" ]; then
+  RUN_OPTS+=(--env-file "$OPENROUTER_ENV_FILE")
+fi
+
 case "${1:-}" in
   build) podman build -t "$IMAGE" -f "$REPO/deploy/container/Containerfile" "$REPO" ;;
   setup) podman run --rm -it "${RUN_OPTS[@]}" "$IMAGE" node dist/index.js --setup ;;

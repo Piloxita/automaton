@@ -13,6 +13,7 @@ import { loadApiKeyFromConfig } from "./identity/provision.js";
 import { createLogger } from "./observability/logger.js";
 import type { ChainType } from "./identity/chain.js";
 import { enforceAutomatonPermissions } from "./sandbox/local-sandbox.js";
+import { deriveSelfhostedModelStrategy } from "./hosting.js";
 
 const logger = createLogger("config");
 const CONFIG_FILENAME = "automaton.json";
@@ -51,10 +52,31 @@ export function loadConfig(): AutomatonConfig | null {
     }
 
     // Deep-merge model strategy config with defaults
-    const modelStrategy: ModelStrategyConfig = {
+    const rawModelStrategy = raw.modelStrategy ?? {};
+    let modelStrategy: ModelStrategyConfig = {
       ...DEFAULT_MODEL_STRATEGY_CONFIG,
-      ...(raw.modelStrategy ?? {}),
+      ...rawModelStrategy,
     };
+
+    const hostingMode: AutomatonConfig["hostingMode"] =
+      raw.hostingMode === "selfhosted" ? "selfhosted" : "conway";
+
+    // Self-hosted mode: point the model strategy at the creator-configured
+    // OpenAI-compatible models (keyed by tier) instead of the Conway-only
+    // defaults, unless the creator already pinned these fields explicitly.
+    let inferenceModel: string = raw.inferenceModel ?? DEFAULT_CONFIG.inferenceModel ?? "gpt-5.2";
+    if (hostingMode === "selfhosted" && raw.openaiCompatible?.models?.length) {
+      const derived = deriveSelfhostedModelStrategy(raw.openaiCompatible.models, modelStrategy);
+      modelStrategy = {
+        ...modelStrategy,
+        inferenceModel: rawModelStrategy.inferenceModel ?? derived.inferenceModel,
+        lowComputeModel: rawModelStrategy.lowComputeModel ?? derived.lowComputeModel,
+        criticalModel: rawModelStrategy.criticalModel ?? derived.criticalModel,
+      };
+      if (!raw.inferenceModel) {
+        inferenceModel = modelStrategy.inferenceModel;
+      }
+    }
 
     // Deep-merge soul config with defaults
     const soulConfig: SoulConfig = {
@@ -74,6 +96,8 @@ export function loadConfig(): AutomatonConfig | null {
       modelStrategy,
       soulConfig,
       chainType: raw.chainType || "evm",
+      hostingMode,
+      inferenceModel,
     } as AutomatonConfig;
   } catch {
     return null;

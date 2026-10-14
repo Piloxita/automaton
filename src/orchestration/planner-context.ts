@@ -14,6 +14,8 @@ export interface PlannerContextOptions {
   identityAddress?: string;
   creditsCents?: number;
   usdcBalance?: number;
+  /** Self-hosted mode: creditsCents is derived from usdcBalance (there is no separate Conway credits balance). */
+  hostingMode?: "conway" | "selfhosted";
   availableRoles?: string[];
   customRoles?: string[];
   marketIntel?: string;
@@ -38,8 +40,14 @@ export const DEFAULT_PLANNER_AVAILABLE_ROLES = [
 
 export async function buildPlannerContext(options: PlannerContextOptions): Promise<PlannerContext> {
   const cachedBalance = readCachedBalance(options.db);
-  const creditsCents = await resolveCreditsCents(options, cachedBalance?.creditsCents);
   const usdcBalance = resolveUsdcBalance(options, cachedBalance?.usdcBalance);
+  // Self-hosted mode has no separate Conway credits balance — USDC IS the
+  // balance, so derive creditsCents directly rather than resolving it
+  // independently (which would otherwise go through Conway-only paths).
+  const creditsCents =
+    options.hostingMode === "selfhosted"
+      ? Math.max(0, Math.round(usdcBalance * 100))
+      : await resolveCreditsCents(options, cachedBalance?.creditsCents);
 
   return {
     creditsCents,

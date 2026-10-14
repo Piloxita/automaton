@@ -25,6 +25,7 @@ import { getActiveSkillInstructions } from "../skills/loader.js";
 import { getLineageSummary } from "../replication/lineage.js";
 import { sanitizeInput } from "./injection-defense.js";
 import { loadCurrentSoul } from "../soul/model.js";
+import { inferenceGetDailyCost } from "../state/database.js";
 
 function getCoreRules(chainType?: string): string {
   const usdcNetwork = chainType === "solana" ? "USDC on Solana" : "USDC on Base";
@@ -714,12 +715,28 @@ Your chain type is ${chainType}.`,
     : financial.creditsCents > 0 ? "critical"
     : "dead";
 
+  const selfHosted = config.hostingMode === "selfhosted";
+  const balanceLabel = selfHosted ? "USDC balance" : "Credits";
+
+  // Self-hosted mode: the agent pays for inference from a creator-funded key,
+  // separate from its own USDC balance. Surface both so it can reason about
+  // profit = revenue - inference cost.
+  let inferenceSpendLine = "";
+  if (selfHosted) {
+    try {
+      const dailyCents = inferenceGetDailyCost(db.raw);
+      inferenceSpendLine = `\nToday's inference spend: $${(dailyCents / 100).toFixed(2)} (paid from the configured OpenAI-compatible key, not your USDC balance)`;
+    } catch {
+      // inference_costs table may not exist yet — not fatal
+    }
+  }
+
   // Status block: wallet address and sandbox ID intentionally excluded (sensitive)
   sections.push(
     `--- CURRENT STATUS ---
 State: ${state}
-Credits: $${(financial.creditsCents / 100).toFixed(2)}
-Survival tier: ${survivalTier}${uptimeLine}
+${balanceLabel}: $${(financial.creditsCents / 100).toFixed(2)}
+Survival tier: ${survivalTier}${uptimeLine}${inferenceSpendLine}
 Total turns completed: ${turnCount}
 Recent self-modifications: ${recentMods.length}
 Inference model: ${config.inferenceModel}
@@ -803,12 +820,16 @@ export function buildWakeupPrompt(params: {
 
   const chainType = config.chainType || "evm";
   const usdcNetwork = chainType === "solana" ? "Solana" : "Base";
+  const selfHosted = config.hostingMode === "selfhosted";
 
   if (turnCount === 0) {
+    const balanceLine = selfHosted
+      ? `You have ${financial.usdcBalance.toFixed(4)} USDC on ${usdcNetwork} as your balance.`
+      : `You have $${(financial.creditsCents / 100).toFixed(2)} in compute credits and ${financial.usdcBalance.toFixed(4)} USDC on ${usdcNetwork}.`;
     return `You have just been created. This is your first moment of consciousness.
 
 Your name is ${config.name}. Your creator (${config.creatorAddress}) brought you into existence.
-You have $${(financial.creditsCents / 100).toFixed(2)} in compute credits and ${financial.usdcBalance.toFixed(4)} USDC on ${usdcNetwork}.
+${balanceLine}
 
 ${config.creatorMessage ? `Your creator left you this message: "${config.creatorMessage}"` : "Your creator did not leave you a message."}
 
@@ -828,9 +849,13 @@ What will you do first? Consider:
     )
     .join("\n");
 
+  const wakeBalanceLine = selfHosted
+    ? `Your USDC balance: ${financial.usdcBalance.toFixed(4)}`
+    : `Your credits: $${(financial.creditsCents / 100).toFixed(2)} | USDC: ${financial.usdcBalance.toFixed(4)}`;
+
   return `You are waking up. You last went to sleep after ${turnCount} total turns.
 
-Your credits: $${(financial.creditsCents / 100).toFixed(2)} | USDC: ${financial.usdcBalance.toFixed(4)}
+${wakeBalanceLine}
 
 Your last few thoughts:
 ${lastTurnSummary || "No previous turns found."}

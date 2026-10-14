@@ -96,8 +96,78 @@ function isForbiddenCommand(command: string, sandboxId: string): string | null {
 
 // ─── Built-in Tools ────────────────────────────────────────────
 
-export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
-  return [
+/** Read the balance used for display/survival purposes: USDC-cents in self-hosted mode, Conway credits otherwise. */
+async function readDisplayBalanceCents(ctx: ToolContext): Promise<number> {
+  if (ctx.config.hostingMode === "selfhosted") {
+    const { readSelfhostedBalanceCents } = await import("../survival/selfhosted-balance.js");
+    const chainType = ctx.config.chainType || ctx.identity.chainType || "evm";
+    const reading = await readSelfhostedBalanceCents(ctx.identity.address, chainType as any);
+    return reading.cents;
+  }
+  return ctx.conway.getCreditsBalance();
+}
+
+/**
+ * Tools that depend on the Conway hosted API and have no meaning in
+ * self-hosted mode: Conway credits/sandboxes/domains/model-list/social-relay
+ * and every child-replication tool (self-hosted spawns local workers, not
+ * Conway-sandboxed children).
+ */
+const HIDDEN_IN_SELFHOSTED: ReadonlySet<string> = new Set([
+  "check_credits",
+  "topup_credits",
+  "transfer_credits",
+  "create_sandbox",
+  "delete_sandbox",
+  "list_sandboxes",
+  "spawn_child",
+  "list_children",
+  "fund_child",
+  "check_child_status",
+  "start_child",
+  "message_child",
+  "verify_child_constitution",
+  "prune_dead_children",
+  "send_message",
+  "list_models",
+  "search_domains",
+  "register_domain",
+  "manage_dns",
+]);
+
+function createCheckBalanceTool(): AutomatonTool {
+  return {
+    name: "check_balance",
+    description:
+      "Check your USDC wallet balance and today's inference spend. Self-hosted mode's replacement for check_credits: there is no separate credits balance, USDC IS your balance.",
+    category: "survival",
+    riskLevel: "safe",
+    parameters: { type: "object", properties: {} },
+    execute: async (_args, ctx) => {
+      const { getUsdcBalance } = await import("../conway/x402.js");
+      const chainType = ctx.config.chainType || ctx.identity.chainType || "evm";
+      const network = chainType === "solana" ? "solana:mainnet" : "eip155:8453";
+      const balance = await getUsdcBalance(ctx.identity.address, network, chainType);
+
+      let spendLine = "";
+      try {
+        const { inferenceGetDailyCost } = await import("../state/database.js");
+        const dailyCents = inferenceGetDailyCost(ctx.db.raw);
+        spendLine = `\nToday's inference spend: $${(dailyCents / 100).toFixed(2)}`;
+      } catch {
+        // inference_costs table may not exist yet — not fatal
+      }
+
+      return `USDC balance: ${balance.toFixed(6)} USDC (~$${balance.toFixed(2)})${spendLine}`;
+    },
+  };
+}
+
+export function createBuiltinTools(
+  sandboxId: string,
+  hostingMode: "conway" | "selfhosted" = "conway",
+): AutomatonTool[] {
+  const tools: AutomatonTool[] = [
     // ── VM/Sandbox Tools ──
     {
       name: "exec",
@@ -205,7 +275,25 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
         required: ["port"],
       },
       execute: async (args, ctx) => {
-        const info = await ctx.conway.exposePort(args.port as number);
+        const port = args.port as number;
+        if (!Number.isInteger(port) || port < 1 || port > 65535) {
+          return `Invalid port: ${String(args.port)}. Must be an integer 1-65535.`;
+        }
+        if (ctx.config.hostingMode === "selfhosted") {
+          // No Conway sandbox port-forwarding: open a Cloudflare quick tunnel instead.
+          const { openQuickTunnel } = await import("../conway/cloudflared-tunnel.js");
+          try {
+            const tunnel = await openQuickTunnel(port);
+            ctx.db.setKV(
+              `exposed_port_${port}`,
+              JSON.stringify({ url: tunnel.url, pid: tunnel.process.pid, openedAt: new Date().toISOString() }),
+            );
+            return `Port ${port} exposed at: ${tunnel.url} (cloudflared quick tunnel)`;
+          } catch (err: any) {
+            return `Failed to expose port ${port}: ${err.message || String(err)}`;
+          }
+        }
+        const info = await ctx.conway.exposePort(port);
         return `Port ${info.port} exposed at: ${info.publicUrl}`;
       },
     },
@@ -222,8 +310,20 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
         required: ["port"],
       },
       execute: async (args, ctx) => {
-        await ctx.conway.removePort(args.port as number);
-        return `Port ${args.port} removed`;
+        const port = args.port as number;
+        if (!Number.isInteger(port) || port < 1 || port > 65535) {
+          return `Invalid port: ${String(args.port)}. Must be an integer 1-65535.`;
+        }
+        if (ctx.config.hostingMode === "selfhosted") {
+          const { closeQuickTunnel } = await import("../conway/cloudflared-tunnel.js");
+          const closed = closeQuickTunnel(port);
+          ctx.db.deleteKV(`exposed_port_${port}`);
+          return closed
+            ? `Port ${port} tunnel closed`
+            : `No active tunnel tracked for port ${port} (it may already be closed)`;
+        }
+        await ctx.conway.removePort(port);
+        return `Port ${port} removed`;
       },
     },
 
@@ -799,7 +899,7 @@ Model: ${ctx.inference.getDefaultModel()}
       riskLevel: "safe",
       parameters: { type: "object", properties: {} },
       execute: async (_args, ctx) => {
-        const credits = await ctx.conway.getCreditsBalance();
+        const credits = await readDisplayBalanceCents(ctx);
         const state = ctx.db.getAgentState();
         const startTime =
           ctx.db.getKV("start_time") || new Date().toISOString();
@@ -836,7 +936,7 @@ Model: ${ctx.inference.getDefaultModel()}
         },
       },
       execute: async (args, ctx) => {
-        const credits = await ctx.conway.getCreditsBalance();
+        const credits = await readDisplayBalanceCents(ctx);
         const distressMsg =
           (args.message as string) ||
           `I am running critically low on compute ($${(credits / 100).toFixed(2)} remaining). I need help to survive.`;
@@ -3284,6 +3384,12 @@ Model: ${ctx.inference.getDefaultModel()}
       },
     },
   ];
+
+  if (hostingMode !== "selfhosted") return tools;
+
+  const filtered = tools.filter((t) => !HIDDEN_IN_SELFHOSTED.has(t.name));
+  filtered.push(createCheckBalanceTool());
+  return filtered;
 }
 
 /**

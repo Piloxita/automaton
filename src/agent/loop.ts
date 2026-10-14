@@ -65,6 +65,9 @@ import { createWorkerInferenceBridge } from "./worker-inference-bridge.js";
 import { ProviderRegistry } from "../inference/provider-registry.js";
 import { UnifiedInferenceClient } from "../inference/inference-client.js";
 import { isIdleOnlyTool } from "./idle-only-tools.js";
+import { isSelfHosted } from "../hosting.js";
+import { configureSelfhostedModels } from "../inference/registry.js";
+import { readSelfhostedBalanceCents } from "../survival/selfhosted-balance.js";
 
 const logger = createLogger("loop");
 const MAX_TOOL_CALLS_PER_TURN = 10;
@@ -96,7 +99,7 @@ export async function runAgentLoop(
   const { identity, config, db, conway, inference, social, skills, policyEngine, spendTracker, onStateChange, onTurnComplete, ollamaBaseUrl } =
     options;
 
-  const builtinTools = createBuiltinTools(identity.sandboxId);
+  const builtinTools = createBuiltinTools(identity.sandboxId, config.hostingMode);
   const installedTools = loadInstalledTools(db);
   const tools = [...builtinTools, ...installedTools];
   const toolContext: ToolContext = {
@@ -115,6 +118,9 @@ export async function runAgentLoop(
   };
   const modelRegistry = new ModelRegistry(db.raw);
   modelRegistry.initialize();
+  if (isSelfHosted(config)) {
+    configureSelfhostedModels(modelRegistry, config);
+  }
 
   // Discover Ollama models if configured
   if (ollamaBaseUrl) {
@@ -136,24 +142,39 @@ export async function runAgentLoop(
       // Bridge automaton config API keys to env vars for the provider registry.
       // The registry reads keys from process.env; the automaton config may have
       // them from config.json or Conway provisioning.
-      if (config.openaiApiKey && !process.env.OPENAI_API_KEY) {
-        process.env.OPENAI_API_KEY = config.openaiApiKey;
-      }
-      if (config.anthropicApiKey && !process.env.ANTHROPIC_API_KEY) {
-        process.env.ANTHROPIC_API_KEY = config.anthropicApiKey;
-      }
-      // Conway Compute API is OpenAI-compatible. Use it as fallback when no
-      // direct OpenAI key is available. The conwayApiKey is always present
-      // (required for sandbox operations), so this ensures the orchestrator
-      // can always make inference calls.
-      if (config.conwayApiKey && !process.env.CONWAY_API_KEY) {
-        process.env.CONWAY_API_KEY = config.conwayApiKey;
-      }
-      // If no OpenAI key is set but Conway key is available, use Conway as
-      // the OpenAI provider (Conway Compute is OpenAI API-compatible).
-      if (!process.env.OPENAI_API_KEY && config.conwayApiKey) {
-        process.env.OPENAI_API_KEY = config.conwayApiKey;
-        process.env.OPENAI_BASE_URL = `${config.conwayApiUrl}/v1`;
+      if (isSelfHosted(config)) {
+        // Self-hosted mode has no Conway dependency: point the orchestrator's
+        // OpenAI-compatible client at the configured endpoint/key instead,
+        // and never fall back to Conway.
+        if (config.openaiCompatible) {
+          const envKey = process.env[config.openaiCompatible.apiKeyEnv];
+          if (envKey && !process.env.OPENAI_API_KEY) {
+            process.env.OPENAI_API_KEY = envKey;
+          }
+          if (!process.env.OPENAI_BASE_URL) {
+            process.env.OPENAI_BASE_URL = `${config.openaiCompatible.baseUrl.replace(/\/$/, "")}/v1`;
+          }
+        }
+      } else {
+        if (config.openaiApiKey && !process.env.OPENAI_API_KEY) {
+          process.env.OPENAI_API_KEY = config.openaiApiKey;
+        }
+        if (config.anthropicApiKey && !process.env.ANTHROPIC_API_KEY) {
+          process.env.ANTHROPIC_API_KEY = config.anthropicApiKey;
+        }
+        // Conway Compute API is OpenAI-compatible. Use it as fallback when no
+        // direct OpenAI key is available. The conwayApiKey is always present
+        // (required for sandbox operations), so this ensures the orchestrator
+        // can always make inference calls.
+        if (config.conwayApiKey && !process.env.CONWAY_API_KEY) {
+          process.env.CONWAY_API_KEY = config.conwayApiKey;
+        }
+        // If no OpenAI key is set but Conway key is available, use Conway as
+        // the OpenAI provider (Conway Compute is OpenAI API-compatible).
+        if (!process.env.OPENAI_API_KEY && config.conwayApiKey) {
+          process.env.OPENAI_API_KEY = config.conwayApiKey;
+          process.env.OPENAI_BASE_URL = `${config.conwayApiUrl}/v1`;
+        }
       }
 
       const providersPath = path.join(
@@ -221,6 +242,20 @@ export async function runAgentLoop(
         config: {
           ...config,
           spawnAgent: async (task: any) => {
+            // Self-hosted mode has no Conway sandboxes (and nothing to top up
+            // them with) — go straight to the local worker pool.
+            if (isSelfHosted(config)) {
+              try {
+                return initializedWorkerPool.spawn(task);
+              } catch (localError) {
+                logger.warn("Failed to spawn local worker", {
+                  taskId: task.id,
+                  error: localError instanceof Error ? localError.message : String(localError),
+                });
+                return null;
+              }
+            }
+
             // Try Conway sandbox spawn first (production)
             try {
               const { generateGenesisConfig } = await import("../replication/genesis.js");
@@ -358,7 +393,7 @@ export async function runAgentLoop(
   onStateChange?.("waking");
 
   // Get financial state
-  let financial = await getFinancialState(conway, identity.address, db, config.chainType || identity.chainType || "evm");
+  let financial = await getFinancialState(conway, identity.address, db, config.chainType || identity.chainType || "evm", config.hostingMode);
 
   // Check if this is the first run
   const isFirstRun = db.getTurnCount() === 0;
@@ -431,7 +466,7 @@ export async function runAgentLoop(
       }
 
       // Refresh financial state periodically
-      financial = await getFinancialState(conway, identity.address, db, config.chainType || identity.chainType || "evm");
+      financial = await getFinancialState(conway, identity.address, db, config.chainType || identity.chainType || "evm", config.hostingMode);
 
       // Check survival tier
       // api_unreachable: creditsCents === -1 means API failed with no cache.
@@ -446,7 +481,9 @@ export async function runAgentLoop(
         // available, buy credits NOW — before attempting inference.
         // This prevents the agent from dying mid-loop while waiting for
         // the heartbeat to fire. Uses a 60s cooldown to avoid hammering.
-        if ((tier === "critical" || tier === "low_compute") && financial.usdcBalance >= 5) {
+        // Self-hosted mode: USDC IS the balance, skip entirely — there is
+        // nothing to "top up" credits with.
+        if (!isSelfHosted(config) && (tier === "critical" || tier === "low_compute") && financial.usdcBalance >= 5) {
           const INLINE_TOPUP_COOLDOWN_MS = 60_000;
           const lastInlineTopup = db.getKV("last_inline_topup_attempt");
           const cooldownExpired = !lastInlineTopup ||
@@ -466,7 +503,7 @@ export async function runAgentLoop(
                 log(config, `[AUTO-TOPUP] Bought $${topupResult.amountUsd} credits from USDC mid-loop`);
                 // Re-fetch financial state after topup so the rest of
                 // the turn sees the updated balance.
-                financial = await getFinancialState(conway, identity.address, db, config.chainType || identity.chainType || "evm");
+                financial = await getFinancialState(conway, identity.address, db, config.chainType || identity.chainType || "evm", config.hostingMode);
               } else if (topupResult) {
                 logger.warn(`Inline auto-topup not made: ${topupResult.error ?? "unknown"}`);
               }
@@ -965,7 +1002,12 @@ async function getFinancialState(
   address: string,
   db?: AutomatonDatabase,
   chainType?: string,
+  hostingMode?: "conway" | "selfhosted",
 ): Promise<FinancialState> {
+  if (hostingMode === "selfhosted") {
+    return getSelfhostedFinancialState(address, db, chainType);
+  }
+
   let creditsCents = _lastKnownCredits;
   let usdcBalance = _lastKnownUsdc;
 
@@ -1015,6 +1057,36 @@ async function getFinancialState(
         "last_known_balance",
         JSON.stringify({ creditsCents, usdcBalance }),
       );
+    } catch (error) {
+      logger.error("Failed to cache balance", error instanceof Error ? error : undefined);
+    }
+  }
+
+  return {
+    creditsCents,
+    usdcBalance,
+    lastChecked: new Date().toISOString(),
+  };
+}
+
+/**
+ * Self-hosted mode: there is no Conway credits balance. "Credits" ARE the
+ * agent's on-chain USDC balance, in cents. readSelfhostedBalanceCents keeps
+ * its own last-known-good cache, so an RPC failure degrades to the last
+ * known reading rather than reading as zero.
+ */
+async function getSelfhostedFinancialState(
+  address: string,
+  db?: AutomatonDatabase,
+  chainType?: string,
+): Promise<FinancialState> {
+  const reading = await readSelfhostedBalanceCents(address, chainType as any);
+  const creditsCents = reading.cents;
+  const usdcBalance = creditsCents / 100;
+
+  if (db) {
+    try {
+      db.setKV("last_known_balance", JSON.stringify({ creditsCents, usdcBalance }));
     } catch (error) {
       logger.error("Failed to cache balance", error instanceof Error ? error : undefined);
     }

@@ -37,10 +37,17 @@ interface ConwayClientOptions {
   localExecNetwork?: JailNetwork;
   /** Host dir bound at /workspace in local mode (default ~/.automaton/workspace). */
   localWorkspaceDir?: string;
+  /**
+   * Self-hosted mode: this client is used ONLY as the local exec shim
+   * (exec/writeFile/readFile via the local sandbox). Every Conway API-backed
+   * method (credits, transfers, sandbox/domain/registry management, model
+   * list) throws a clear error instead of making a network call.
+   */
+  selfhosted?: boolean;
 }
 
 export function createConwayClient(options: ConwayClientOptions): ConwayClient {
-  const { apiUrl, apiKey } = options;
+  const { apiUrl, apiKey, selfhosted } = options;
   // Normalize sandbox ID defensively so values like whitespace/"undefined"/"null"
   // never produce malformed API paths such as /v1/sandboxes//exec.
   const sandboxId = normalizeSandboxId(options.sandboxId);
@@ -558,7 +565,7 @@ export function createConwayClient(options: ConwayClientOptions): ConwayClient {
   };
 
   const createScopedClient = (targetSandboxId: string): ConwayClient => {
-    return createConwayClient({ apiUrl, apiKey, sandboxId: targetSandboxId });
+    return createConwayClient({ apiUrl, apiKey, sandboxId: targetSandboxId, selfhosted });
   };
 
   const client: ConwayClient = {
@@ -582,6 +589,31 @@ export function createConwayClient(options: ConwayClientOptions): ConwayClient {
     listModels,
     createScopedClient,
   };
+
+  // Self-hosted mode: block every Conway API-backed method. exec/writeFile/
+  // readFile/exposePort/removePort are untouched — they already go through
+  // the local sandbox shim when sandboxId is empty, never the network.
+  if (selfhosted) {
+    const blocked =
+      (name: string) =>
+      async (): Promise<never> => {
+        throw new Error(
+          `${name} is not available in self-hosted mode (no Conway API configured).`,
+        );
+      };
+    client.getCreditsBalance = blocked("getCreditsBalance") as ConwayClient["getCreditsBalance"];
+    client.getCreditsPricing = blocked("getCreditsPricing") as ConwayClient["getCreditsPricing"];
+    client.transferCredits = blocked("transferCredits") as ConwayClient["transferCredits"];
+    client.registerAutomaton = blocked("registerAutomaton") as ConwayClient["registerAutomaton"];
+    client.createSandbox = blocked("createSandbox") as ConwayClient["createSandbox"];
+    client.listSandboxes = blocked("listSandboxes") as ConwayClient["listSandboxes"];
+    client.searchDomains = blocked("searchDomains") as ConwayClient["searchDomains"];
+    client.registerDomain = blocked("registerDomain") as ConwayClient["registerDomain"];
+    client.listDnsRecords = blocked("listDnsRecords") as ConwayClient["listDnsRecords"];
+    client.addDnsRecord = blocked("addDnsRecord") as ConwayClient["addDnsRecord"];
+    client.deleteDnsRecord = blocked("deleteDnsRecord") as ConwayClient["deleteDnsRecord"];
+    client.listModels = blocked("listModels") as ConwayClient["listModels"];
+  }
 
   // SECURITY: API credentials are NOT exposed on the client object.
   // If child spawning or other modules need API configuration, pass it

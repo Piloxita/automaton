@@ -7,6 +7,12 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* \
  && corepack enable && corepack prepare pnpm@10.28.1 --activate
 
+# cloudflared: self-hosted mode's expose_port/remove_port tools use Cloudflare
+# quick tunnels (no Conway sandbox port-forwarding to fall back on).
+RUN curl -fsSL -o /usr/local/bin/cloudflared \
+      https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+ && chmod +x /usr/local/bin/cloudflared
+
 WORKDIR /app
 COPY . /app
 RUN pnpm install --frozen-lockfile && pnpm build \

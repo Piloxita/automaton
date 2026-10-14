@@ -15,7 +15,9 @@ import type {
 } from "../types.js";
 import { getSurvivalTier } from "../conway/credits.js";
 import { getUsdcBalance } from "../conway/x402.js";
+import { readSelfhostedBalanceCents } from "../survival/selfhosted-balance.js";
 import { createLogger } from "../observability/logger.js";
+import type { ChainType } from "../identity/chain.js";
 
 type DatabaseType = BetterSqlite3.Database;
 const logger = createLogger("heartbeat.tick");
@@ -43,25 +45,46 @@ export async function buildTickContext(
   config: HeartbeatConfig,
   walletAddress?: string,
   chainType?: string,
+  hostingMode?: "conway" | "selfhosted",
 ): Promise<TickContext> {
   const tickId = generateTickId();
   const startedAt = new Date();
 
   // Fetch balances ONCE
   let creditBalance = 0;
-  try {
-    creditBalance = await conway.getCreditsBalance();
-  } catch (err: any) {
-    logger.error("Failed to fetch credit balance", err instanceof Error ? err : undefined);
-  }
-
+  let creditBalanceKnown = true;
   let usdcBalance = 0;
-  if (walletAddress) {
+
+  if (hostingMode === "selfhosted") {
+    // Self-hosted mode: there is no Conway credits balance. The agent's
+    // "credits" ARE its USDC balance (in cents). An RPC failure must never
+    // read as a zero balance — keep the last known reading and flag it as
+    // unknown so heartbeat tasks never trigger death on a transient failure.
+    if (walletAddress) {
+      const reading = await readSelfhostedBalanceCents(walletAddress, chainType as ChainType | undefined);
+      creditBalance = reading.cents;
+      creditBalanceKnown = reading.known;
+      if (!reading.known) {
+        logger.error("Failed to read self-hosted USDC balance; using last known value");
+      }
+    } else {
+      creditBalanceKnown = false;
+    }
+    usdcBalance = creditBalance / 100;
+  } else {
     try {
-      const network = chainType === "solana" ? "solana:mainnet" : "eip155:8453";
-      usdcBalance = await getUsdcBalance(walletAddress, network, chainType as any);
+      creditBalance = await conway.getCreditsBalance();
     } catch (err: any) {
-      logger.error("Failed to fetch USDC balance", err instanceof Error ? err : undefined);
+      logger.error("Failed to fetch credit balance", err instanceof Error ? err : undefined);
+    }
+
+    if (walletAddress) {
+      try {
+        const network = chainType === "solana" ? "solana:mainnet" : "eip155:8453";
+        usdcBalance = await getUsdcBalance(walletAddress, network, chainType as any);
+      } catch (err: any) {
+        logger.error("Failed to fetch USDC balance", err instanceof Error ? err : undefined);
+      }
     }
   }
 
@@ -72,6 +95,7 @@ export async function buildTickContext(
     tickId,
     startedAt,
     creditBalance,
+    creditBalanceKnown,
     usdcBalance,
     survivalTier,
     lowComputeMultiplier,

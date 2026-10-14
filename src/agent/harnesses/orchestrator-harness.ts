@@ -401,6 +401,7 @@ You follow a strict planner-backed plan → execute → verify → fix cycle:
       db: this.context.db,
       workspace: this.context.workspace,
       usdcBalance: Number((this.context.config as { usdcBalance?: number } | undefined)?.usdcBalance ?? 0),
+      hostingMode: this.context.config?.hostingMode,
       availableRoles: ["executor", "researcher", "tester", "generalist", "orchestrator", "critic"],
       idleAgents: 0,
       busyAgents: Math.max(1, this.getManagedTasks().filter((task) => task.status === "assigned" || task.status === "running").length),

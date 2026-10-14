@@ -92,14 +92,20 @@ export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
 
   check_credits: async (ctx: TickContext, taskCtx: HeartbeatLegacyContext) => {
     // Use ctx.creditBalance instead of calling conway.getCreditsBalance()
+    // (self-hosted mode: this is the USDC balance in cents, see tick-context.ts)
     const credits = ctx.creditBalance;
     const tier = ctx.survivalTier;
     const now = new Date().toISOString();
+    // Self-hosted mode only: an RPC failure must never advance (or start) the
+    // death countdown. Conway mode is untouched — ctx.creditBalanceKnown is
+    // undefined there and treated as known, same as before this field existed.
+    const balanceKnown = ctx.creditBalanceKnown !== false;
 
     taskCtx.db.setKV("last_credit_check", JSON.stringify({
       credits,
       tier,
       timestamp: now,
+      known: balanceKnown,
     }));
 
     // Wake the agent if credits dropped to a new tier
@@ -111,6 +117,11 @@ export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
     // USDC can't go negative, so dead is only reached via this timeout.
     const DEAD_GRACE_PERIOD_MS = 3_600_000; // 1 hour
     if (tier === "critical" && credits === 0) {
+      if (!balanceKnown) {
+        // Unknown reading (self-hosted RPC failure) — do not start or advance
+        // the death countdown; leave any existing timer untouched.
+        return { shouldWake: false };
+      }
       const zeroSince = taskCtx.db.getKV("zero_credits_since");
       if (!zeroSince) {
         // First time seeing zero — start the grace period
@@ -155,6 +166,12 @@ export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
       credits,
       timestamp: new Date().toISOString(),
     }));
+
+    if (taskCtx.config.hostingMode === "selfhosted") {
+      // Self-hosted mode: USDC IS the balance, there are no Conway credits to
+      // buy with it. Nothing to top up.
+      return { shouldWake: false };
+    }
 
     const MIN_TOPUP_USD = 5;
     if (balance >= MIN_TOPUP_USD && (ctx.survivalTier === "critical" || ctx.survivalTier === "dead")) {
@@ -340,6 +357,10 @@ export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
 
   // === Phase 2.3: Model Registry Refresh ===
   refresh_models: async (_ctx: TickContext, taskCtx: HeartbeatLegacyContext) => {
+    if (taskCtx.config.hostingMode === "selfhosted") {
+      // Conway-only: self-hosted models come from config.openaiCompatible.
+      return { shouldWake: false };
+    }
     try {
       const models = await taskCtx.conway.listModels();
       if (models.length > 0) {
@@ -360,6 +381,10 @@ export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
 
   // === Phase 3.1: Child Health Check ===
   check_child_health: async (_ctx: TickContext, taskCtx: HeartbeatLegacyContext) => {
+    if (taskCtx.config.hostingMode === "selfhosted") {
+      // Self-hosted mode spawns local workers, not Conway-sandboxed children.
+      return { shouldWake: false };
+    }
     try {
       const { ChildLifecycle } = await import("../replication/lifecycle.js");
       const { ChildHealthMonitor } = await import("../replication/health.js");
@@ -385,6 +410,10 @@ export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
 
   // === Phase 3.1: Prune Dead Children ===
   prune_dead_children: async (_ctx: TickContext, taskCtx: HeartbeatLegacyContext) => {
+    if (taskCtx.config.hostingMode === "selfhosted") {
+      // Self-hosted mode spawns local workers, not Conway-sandboxed children.
+      return { shouldWake: false };
+    }
     try {
       const { ChildLifecycle } = await import("../replication/lifecycle.js");
       const { SandboxCleanup } = await import("../replication/cleanup.js");

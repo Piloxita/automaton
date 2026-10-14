@@ -38,6 +38,14 @@ import { SpendGuard, installSpendGuard } from "./survival/spend-guard.js";
 import { createBalanceProvider } from "./survival/spend-balance.js";
 import { randomUUID } from "crypto";
 import { keccak256, toHex } from "viem";
+import {
+  isSelfHosted,
+  requiresConwayApiKey,
+  shouldRegisterWithConway,
+  shouldBootstrapTopup,
+  shouldCreateSocialClient,
+} from "./hosting.js";
+import { configureSelfhostedModels } from "./inference/registry.js";
 
 const logger = createLogger("main");
 const VERSION = "0.2.1";
@@ -198,8 +206,8 @@ async function run(): Promise<void> {
   // Load wallet (chain-aware)
   const { account, chainIdentity, chainType: walletChainType } = await getWallet();
   const resolvedChainType = config.chainType || walletChainType || "evm";
-  const apiKey = config.conwayApiKey || loadApiKeyFromConfig();
-  if (!apiKey) {
+  const apiKey = config.conwayApiKey || loadApiKeyFromConfig() || "";
+  if (!apiKey && requiresConwayApiKey(config)) {
     logger.error("No API key found. Run: automaton --provision");
     process.exit(1);
   }
@@ -262,18 +270,22 @@ async function run(): Promise<void> {
     }
   }
 
-  // Create Conway client
+  // Create Conway client. In self-hosted mode this is used ONLY as the local
+  // exec shim (sandboxId is empty -> local bwrap/unsafe-host sandbox); its
+  // Conway API-backed methods (credits, transfers, sandboxes, domains, model
+  // list) are disabled and throw a clear error instead of hitting the network.
   const conway = createConwayClient({
     apiUrl: config.conwayApiUrl,
     apiKey,
     sandboxId: config.sandboxId,
     localExecMode: config.localExecMode,
     localExecNetwork: config.localExecNetwork,
+    selfhosted: isSelfHosted(config),
   });
 
-  // Register automaton identity (one-time, immutable)
+  // Register automaton identity (one-time, immutable) — Conway-only.
   const registrationState = db.getIdentity("conwayRegistrationStatus");
-  if (registrationState !== "registered") {
+  if (shouldRegisterWithConway(config) && registrationState !== "registered") {
     try {
       const genesisPromptHash = config.genesisPrompt
         ? keccak256(toHex(config.genesisPrompt))
@@ -310,6 +322,9 @@ async function run(): Promise<void> {
   // "gpt-oss:120b" route to Ollama based on their registered provider, not heuristics.
   const modelRegistry = new ModelRegistry(db.raw);
   modelRegistry.initialize();
+  if (isSelfHosted(config)) {
+    configureSelfhostedModels(modelRegistry, config);
+  }
   const inference = createInferenceClient({
     apiUrl: config.conwayApiUrl,
     apiKey,
@@ -319,6 +334,8 @@ async function run(): Promise<void> {
     openaiApiKey: config.openaiApiKey,
     anthropicApiKey: config.anthropicApiKey,
     ollamaBaseUrl,
+    openaiCompatible: config.openaiCompatible,
+    hostingMode: config.hostingMode,
     getModelProvider: (modelId) => modelRegistry.get(modelId)?.provider,
   });
 
@@ -326,11 +343,15 @@ async function run(): Promise<void> {
     logger.info(`[${new Date().toISOString()}] Ollama backend: ${ollamaBaseUrl}`);
   }
 
-  // Create social client (chain-aware: pass ChainIdentity for Solana signing)
+  // Create social client (chain-aware: pass ChainIdentity for Solana signing).
+  // Self-hosted mode has no Conway dependency at all, so the social relay
+  // (which defaults to Conway's) is disabled entirely.
   let social: SocialClientInterface | undefined;
-  if (config.socialRelayUrl) {
-    social = createSocialClient(config.socialRelayUrl, resolvedChainType === "solana" ? chainIdentity : account);
+  if (shouldCreateSocialClient(config)) {
+    social = createSocialClient(config.socialRelayUrl!, resolvedChainType === "solana" ? chainIdentity : account);
     logger.info(`[${new Date().toISOString()}] Social relay: ${config.socialRelayUrl}`);
+  } else if (isSelfHosted(config)) {
+    logger.info(`[${new Date().toISOString()}] Self-hosted mode: social relay disabled.`);
   }
 
   // Initialize PolicyEngine + SpendTracker (Phase 1.4)
@@ -345,7 +366,7 @@ async function run(): Promise<void> {
     new SpendGuard(
       db.raw,
       treasuryPolicy,
-      createBalanceProvider({ conway, address: identity.address, chainType: resolvedChainType }),
+      createBalanceProvider({ conway, address: identity.address, chainType: resolvedChainType, hostingMode: config.hostingMode }),
     ),
   );
 
@@ -374,7 +395,8 @@ async function run(): Promise<void> {
 
   // Bootstrap topup: buy minimum credits ($5) from USDC so the agent can start.
   // The agent decides larger topups itself via the topup_credits tool.
-  try {
+  // Self-hosted mode has no Conway credits to buy — USDC IS the balance.
+  if (shouldBootstrapTopup(config)) try {
     let bootstrapTimer: ReturnType<typeof setTimeout>;
     const bootstrapTimeout = new Promise<null>((_, reject) => {
       bootstrapTimer = setTimeout(() => reject(new Error("bootstrap topup timed out")), 15_000);

@@ -27,11 +27,15 @@ interface InferenceClientOptions {
   openaiApiKey?: string;
   anthropicApiKey?: string;
   ollamaBaseUrl?: string;
+  /** Self-hosted mode's OpenAI-compatible endpoint (e.g. OpenRouter). The API key is read from `process.env[apiKeyEnv]`, never stored. */
+  openaiCompatible?: { baseUrl: string; apiKeyEnv: string };
+  /** "selfhosted" means there is no Conway dependency: the heuristic fallback backend must never be "conway". */
+  hostingMode?: "conway" | "selfhosted";
   /** Optional registry lookup — if provided, used before name heuristics */
   getModelProvider?: (modelId: string) => string | undefined;
 }
 
-type InferenceBackend = "conway" | "openai" | "anthropic" | "ollama";
+type InferenceBackend = "conway" | "openai" | "anthropic" | "ollama" | "openai_compatible";
 
 function isLoopbackHttpUrl(url: string | undefined): boolean {
   if (!url) return false;
@@ -48,7 +52,7 @@ function isLoopbackHttpUrl(url: string | undefined): boolean {
 export function createInferenceClient(
   options: InferenceClientOptions,
 ): InferenceClient {
-  const { apiUrl, apiKey, openaiApiKey, anthropicApiKey, ollamaBaseUrl, getModelProvider } = options;
+  const { apiUrl, apiKey, openaiApiKey, anthropicApiKey, ollamaBaseUrl, openaiCompatible, hostingMode, getModelProvider } = options;
   const httpClient = new ResilientHttpClient({
     baseTimeout: INFERENCE_TIMEOUT_MS,
     retryableStatuses: [429, 500, 502, 503, 504],
@@ -68,6 +72,8 @@ export function createInferenceClient(
       openaiApiKey,
       anthropicApiKey,
       ollamaBaseUrl,
+      openaiCompatible,
+      hostingMode,
       getModelProvider,
     });
 
@@ -113,10 +119,12 @@ export function createInferenceClient(
     const openAiLikeApiUrl =
       backend === "openai" ? "https://api.openai.com" :
       backend === "ollama" ? (ollamaBaseUrl as string).replace(/\/$/, "") :
+      backend === "openai_compatible" ? (openaiCompatible as { baseUrl: string }).baseUrl.replace(/\/$/, "") :
       apiUrl;
     const openAiLikeApiKey =
       backend === "openai" ? (openaiApiKey as string) :
       backend === "ollama" ? "ollama" :
+      backend === "openai_compatible" ? (process.env[(openaiCompatible as { apiKeyEnv: string }).apiKeyEnv] || "") :
       apiKey;
 
     return chatViaOpenAiCompatible({
@@ -174,12 +182,14 @@ function formatMessage(
  * When InferenceRouter is available, it uses the model registry's provider field.
  * This function is kept for backward compatibility with direct inference calls.
  */
-function resolveInferenceBackend(
+export function resolveInferenceBackend(
   model: string,
   keys: {
     openaiApiKey?: string;
     anthropicApiKey?: string;
     ollamaBaseUrl?: string;
+    openaiCompatible?: { baseUrl: string; apiKeyEnv: string };
+    hostingMode?: "conway" | "selfhosted";
     getModelProvider?: (modelId: string) => string | undefined;
   },
 ): InferenceBackend {
@@ -189,15 +199,17 @@ function resolveInferenceBackend(
     if (provider === "ollama" && keys.ollamaBaseUrl) return "ollama";
     if (provider === "anthropic" && keys.anthropicApiKey) return "anthropic";
     if (provider === "openai" && keys.openaiApiKey) return "openai";
-    if (provider === "conway") return "conway";
+    if (provider === "openai_compatible" && keys.openaiCompatible) return "openai_compatible";
+    if (provider === "conway" && keys.hostingMode !== "selfhosted") return "conway";
     // provider unknown or key not configured — fall through to heuristics
   }
 
   // Heuristic fallback (model not in registry yet)
   if (keys.anthropicApiKey && /^claude/i.test(model)) return "anthropic";
   if (keys.openaiApiKey && /^(gpt-[3-9]|gpt-4|gpt-5|o[1-9][-\s.]|o[1-9]$|chatgpt)/i.test(model)) return "openai";
-  return "conway";
 
+  // Self-hosted mode has no Conway dependency: the fallback must never be "conway".
+  return keys.hostingMode === "selfhosted" ? "openai_compatible" : "conway";
 }
 
 async function chatViaOpenAiCompatible(params: {
@@ -205,7 +217,7 @@ async function chatViaOpenAiCompatible(params: {
   body: Record<string, unknown>;
   apiUrl: string;
   apiKey: string;
-  backend: "conway" | "openai" | "ollama";
+  backend: "conway" | "openai" | "ollama" | "openai_compatible";
   httpClient: ResilientHttpClient;
 }): Promise<InferenceResponse> {
   const resp = await params.httpClient.request(`${params.apiUrl}/v1/chat/completions`, {
@@ -213,7 +225,7 @@ async function chatViaOpenAiCompatible(params: {
     headers: {
       "Content-Type": "application/json",
       Authorization:
-        params.backend === "openai" || params.backend === "ollama"
+        params.backend === "openai" || params.backend === "ollama" || params.backend === "openai_compatible"
           ? `Bearer ${params.apiKey}`
           : params.apiKey,
     },

@@ -2,5 +2,36 @@
   "name": "Piloxita-Automaton-1",
   "creatorAddress": "0x606B304eE4F1ce1546632DDAD3b7b5b122647729",
   "genesisFile": "/setup/genesis.md",
-  "upstreamRepoUrl": "https://github.com/Piloxita/automaton.git"
+  "upstreamRepoUrl": "https://github.com/Piloxita/automaton.git",
+  "hostingMode": "selfhosted",
+  "openaiCompatible": {
+    "baseUrl": "https://openrouter.ai/api",
+    "apiKeyEnv": "OPENROUTER_API_KEY",
+    "models": [
+      {
+        "id": "anthropic/claude-sonnet-5.5",
+        "tier": "default",
+        "costPer1kInputCents": 0.2,
+        "costPer1kOutputCents": 1.0,
+        "contextWindow": 200000,
+        "maxOutputTokens": 8192
+      },
+      {
+        "id": "anthropic/claude-haiku-5.5",
+        "tier": "low_compute",
+        "costPer1kInputCents": 0.01,
+        "costPer1kOutputCents": 0.05,
+        "contextWindow": 200000,
+        "maxOutputTokens": 8192
+      },
+      {
+        "id": "anthropic/claude-haiku-5.5",
+        "tier": "critical",
+        "costPer1kInputCents": 0.01,
+        "costPer1kOutputCents": 0.05,
+        "contextWindow": 200000,
+        "maxOutputTokens": 4096
+      }
+    ]
+  }
 }
