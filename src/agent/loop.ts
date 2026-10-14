@@ -416,6 +416,7 @@ export async function runAgentLoop(
 
   const MAX_IDLE_TURNS = 10; // Force sleep after N turns with no real work
   let idleTurnCount = 0;
+  let emptyInferenceTurns = 0;
 
   const maxCycleTurns = config.maxTurnsPerCycle ?? 25;
   let cycleTurnCount = 0;
@@ -665,6 +666,24 @@ export async function runAgentLoop(
         },
         (msgs, opts) => inference.chat(msgs, { ...opts, tools: inferenceTools }),
       );
+
+      // No usable model or an empty reply (no key, provider down, budget
+      // exhausted): back off instead of spinning through empty turns.
+      const emptyTurn =
+        routerResult.inputTokens + routerResult.outputTokens === 0 &&
+        !routerResult.content &&
+        !(routerResult.toolCalls && (routerResult.toolCalls as unknown[]).length > 0);
+      if (emptyTurn) {
+        emptyInferenceTurns++;
+        const backoffMs = Math.min(60_000 * 2 ** (emptyInferenceTurns - 1), 30 * 60_000);
+        log(config, `[THINK] Inference produced nothing (model: ${routerResult.model}). Sleeping ${Math.round(backoffMs / 1000)}s.`);
+        db.setKV("sleep_until", new Date(Date.now() + backoffMs).toISOString());
+        db.setAgentState("sleeping");
+        onStateChange?.("sleeping");
+        running = false;
+        break;
+      }
+      emptyInferenceTurns = 0;
 
       // Build a compatible response for the rest of the loop
       const response = {

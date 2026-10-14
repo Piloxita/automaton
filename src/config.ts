@@ -67,13 +67,17 @@ export function loadConfig(): AutomatonConfig | null {
     let inferenceModel: string = raw.inferenceModel ?? DEFAULT_CONFIG.inferenceModel ?? "gpt-5.2";
     if (hostingMode === "selfhosted" && raw.openaiCompatible?.models?.length) {
       const derived = deriveSelfhostedModelStrategy(raw.openaiCompatible.models, modelStrategy);
+      // A pinned model only counts if it is one of the configured models;
+      // saved configs carry the Conway defaults (gpt-5.2...), which have no key here.
+      const configuredIds = new Set(raw.openaiCompatible.models.map((m: { id: string }) => m.id));
+      const pinned = (id: string | undefined) => (id && configuredIds.has(id) ? id : undefined);
       modelStrategy = {
         ...modelStrategy,
-        inferenceModel: rawModelStrategy.inferenceModel ?? derived.inferenceModel,
-        lowComputeModel: rawModelStrategy.lowComputeModel ?? derived.lowComputeModel,
-        criticalModel: rawModelStrategy.criticalModel ?? derived.criticalModel,
+        inferenceModel: pinned(rawModelStrategy.inferenceModel) ?? derived.inferenceModel,
+        lowComputeModel: pinned(rawModelStrategy.lowComputeModel) ?? derived.lowComputeModel,
+        criticalModel: pinned(rawModelStrategy.criticalModel) ?? derived.criticalModel,
       };
-      if (!raw.inferenceModel) {
+      if (!pinned(raw.inferenceModel)) {
         inferenceModel = modelStrategy.inferenceModel;
       }
     }

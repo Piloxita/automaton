@@ -544,3 +544,36 @@ describe("Cloudflare quick tunnels (expose_port / remove_port)", () => {
     expect(closeQuickTunnel(9999)).toBe(false);
   });
 });
+
+describe("loadConfig in self-hosted mode", () => {
+  it("ignores saved Conway default models that are not among the configured models", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "selfhost-cfg-"));
+    const prevHome = process.env.HOME;
+    process.env.HOME = home;
+    try {
+      fs.mkdirSync(path.join(home, ".automaton"), { recursive: true });
+      fs.writeFileSync(path.join(home, ".automaton", "automaton.json"), JSON.stringify({
+        name: "t", genesisPrompt: "g", creatorAddress: "0x0", walletAddress: "0x0",
+        hostingMode: "selfhosted", inferenceModel: "gpt-5.2",
+        modelStrategy: { inferenceModel: "gpt-5.2", lowComputeModel: "gpt-5-mini", criticalModel: "gpt-5-mini" },
+        openaiCompatible: { baseUrl: "https://openrouter.ai/api", apiKeyEnv: "K", models: [
+          { id: "vendor/big", tier: "default", costPer1kInputCents: 0.2, costPer1kOutputCents: 1 },
+          { id: "vendor/small", tier: "low_compute", costPer1kInputCents: 0.01, costPer1kOutputCents: 0.05 },
+        ] },
+      }));
+      vi.resetModules();
+      const { loadConfig } = await import("../config.js");
+      const cfg = loadConfig()!;
+      expect(cfg.modelStrategy?.inferenceModel).toBe("vendor/big");
+      expect(cfg.modelStrategy?.lowComputeModel).toBe("vendor/small");
+      expect(cfg.modelStrategy?.criticalModel).toBe("vendor/small");
+      expect(cfg.inferenceModel).toBe("vendor/big");
+    } finally {
+      process.env.HOME = prevHome;
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+});

@@ -252,7 +252,10 @@ async function run(): Promise<void> {
   if (!config.sandboxId) {
     const { resolveLocalExecMode, resolveJailNetwork, LOCAL_EXEC_DISABLED_MESSAGE } = await import("./sandbox/local-sandbox.js");
     const localMode = resolveLocalExecMode(config.localExecMode);
-    if (localMode === "unsafe-host") {
+    const { isContainedProfile } = await import("./self-mod/code.js");
+    if (localMode === "unsafe-host" && isContainedProfile()) {
+      logger.info("localExecMode=unsafe-host inside the creator's container: the container is the sandbox.");
+    } else if (localMode === "unsafe-host") {
       logger.warn(
         "!!! localExecMode=unsafe-host: shell commands run DIRECTLY ON THIS HOST with no isolation. " +
           "The agent can read your wallet key, config and any file you can. Use only if you accept that risk.",
