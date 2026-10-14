@@ -115,6 +115,12 @@ export interface AutomatonConfig {
   openaiCompatible?: {
     baseUrl: string;
     apiKeyEnv: string;
+    /**
+     * Prepaid inference the agent does not pay for per call (e.g. the
+     * creator's Claude subscription via the host relay), in cents. Counted
+     * toward the balance so survival tiers reflect it.
+     */
+    allowanceCents?: number;
     models: Array<{
       id: string;
       /** Minimum survival tier this model is used for. Default: "default" (normal tier). */

@@ -5,19 +5,20 @@
   "upstreamRepoUrl": "https://github.com/Piloxita/automaton.git",
   "hostingMode": "selfhosted",
   "openaiCompatible": {
-    "baseUrl": "https://openrouter.ai/api",
-    "apiKeyEnv": "OPENROUTER_API_KEY",
+    "baseUrl": "unix:/run/relay/relay.sock",
+    "apiKeyEnv": "RELAY_UNUSED_KEY",
+    "allowanceCents": 2000,
     "models": [
       {
-        "id": "anthropic/claude-sonnet-5.5",
+        "id": "claude-relay/sonnet",
         "tier": "default",
-        "costPer1kInputCents": 0.2,
-        "costPer1kOutputCents": 1.0,
+        "costPer1kInputCents": 0.3,
+        "costPer1kOutputCents": 1.5,
         "contextWindow": 200000,
         "maxOutputTokens": 8192
       },
       {
-        "id": "anthropic/claude-haiku-5.5",
+        "id": "claude-relay/haiku",
         "tier": "low_compute",
         "costPer1kInputCents": 0.01,
         "costPer1kOutputCents": 0.05,
@@ -25,7 +26,7 @@
         "maxOutputTokens": 8192
       },
       {
-        "id": "anthropic/claude-haiku-5.5",
+        "id": "claude-relay/haiku",
         "tier": "critical",
         "costPer1kInputCents": 0.01,
         "costPer1kOutputCents": 0.05,

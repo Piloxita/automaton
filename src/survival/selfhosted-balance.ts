@@ -35,14 +35,17 @@ let lastKnownCents: number | null = null;
 interface InferenceCreditSource {
   baseUrl: string;
   apiKeyEnv: string;
+  allowanceCents?: number;
 }
 
 let creditSource: InferenceCreditSource | null = null;
+let allowanceCents = 0;
 let lastCredit: { cents: number; at: number } | null = null;
 const CREDIT_TTL_MS = 5 * 60_000;
 
 /** Called at startup in self-hosted mode with config.openaiCompatible. */
 export function setInferenceCreditSource(source: InferenceCreditSource | null | undefined): void {
+  allowanceCents = Math.max(0, Math.floor(source?.allowanceCents ?? 0));
   creditSource = source && /(^|\.)openrouter\.ai$/.test(safeHost(source.baseUrl)) ? source : null;
   lastCredit = null;
 }
@@ -61,6 +64,10 @@ function safeHost(url: string): string {
  * should set a limit on the key. Failures return the last known value.
  */
 export async function readInferenceCreditCents(fetchFn: typeof fetch = fetch): Promise<number> {
+  return allowanceCents + (await readOpenRouterCreditCents(fetchFn));
+}
+
+async function readOpenRouterCreditCents(fetchFn: typeof fetch): Promise<number> {
   if (!creditSource) return 0;
   if (lastCredit && Date.now() - lastCredit.at < CREDIT_TTL_MS) return lastCredit.cents;
   const key = process.env[creditSource.apiKeyEnv];
@@ -114,5 +121,6 @@ export async function readSelfhostedBalanceCents(
 export function resetSelfhostedBalanceCacheForTests(): void {
   lastKnownCents = null;
   creditSource = null;
+  allowanceCents = 0;
   lastCredit = null;
 }

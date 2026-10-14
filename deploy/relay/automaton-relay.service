@@ -1,0 +1,17 @@
+[Unit]
+Description=Automaton Claude relay (subscription inference over a unix socket)
+
+[Service]
+# Dedicated Claude config dir for the agent's own account: no user settings,
+# hooks, MCP servers or memory from the creator's main account.
+Environment=PATH=%h/.local/share/mise/shims:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=CLAUDE_CONFIG_DIR=%h/.config/automaton-creator/claude
+Environment=RELAY_MAX_CALLS_PER_HOUR=60
+# Optional: CLAUDE_CODE_OAUTH_TOKEN=... from `claude setup-token` (chmod 600).
+EnvironmentFile=-%h/.config/automaton-creator/claude-relay.env
+ExecStart=/usr/bin/python3 %h/Projects/automaton/deploy/relay/claude-relay.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

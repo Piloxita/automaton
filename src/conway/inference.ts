@@ -5,6 +5,7 @@
  * The automaton pays for its own thinking through Conway credits.
  */
 
+import { isUnixBaseUrl, postUnix } from "./unix-http.js";
 import type {
   InferenceClient,
   ChatMessage,
@@ -17,6 +18,8 @@ import type {
 import { ResilientHttpClient } from "./http-client.js";
 
 const INFERENCE_TIMEOUT_MS = 60_000;
+// The host-side Claude relay runs a full CLI turn per request; allow longer.
+const RELAY_TIMEOUT_MS = 330_000;
 
 interface InferenceClientOptions {
   apiUrl: string;
@@ -220,18 +223,21 @@ async function chatViaOpenAiCompatible(params: {
   backend: "conway" | "openai" | "ollama" | "openai_compatible";
   httpClient: ResilientHttpClient;
 }): Promise<InferenceResponse> {
-  const resp = await params.httpClient.request(`${params.apiUrl}/v1/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization:
-        params.backend === "openai" || params.backend === "ollama" || params.backend === "openai_compatible"
-          ? `Bearer ${params.apiKey}`
-          : params.apiKey,
-    },
-    body: JSON.stringify(params.body),
-    timeout: INFERENCE_TIMEOUT_MS,
-  });
+  const headers = {
+    "Content-Type": "application/json",
+    Authorization:
+      params.backend === "openai" || params.backend === "ollama" || params.backend === "openai_compatible"
+        ? `Bearer ${params.apiKey}`
+        : params.apiKey,
+  };
+  const resp = isUnixBaseUrl(params.apiUrl)
+    ? await postUnix(params.apiUrl, "/v1/chat/completions", headers, JSON.stringify(params.body), RELAY_TIMEOUT_MS)
+    : await params.httpClient.request(`${params.apiUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(params.body),
+        timeout: INFERENCE_TIMEOUT_MS,
+      });
 
   if (!resp.ok) {
     const text = await resp.text();

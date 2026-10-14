@@ -606,3 +606,46 @@ describe("inference credit counts toward the self-hosted balance", () => {
     delete process.env.TEST_OR_KEY;
   });
 });
+
+describe("relay allowance and unix transport", () => {
+  afterEach(() => resetSelfhostedBalanceCacheForTests());
+
+  it("counts a configured allowance as inference credit without any network call", async () => {
+    const { setInferenceCreditSource, readInferenceCreditCents } = await import("../survival/selfhosted-balance.js");
+    setInferenceCreditSource({ baseUrl: "unix:/run/relay/relay.sock", apiKeyEnv: "NONE", allowanceCents: 2000 });
+    const never = vi.fn();
+    expect(await readInferenceCreditCents(never as unknown as typeof fetch)).toBe(2000);
+    expect(never).not.toHaveBeenCalled();
+  });
+
+  it("posts chat completions over a unix socket", async () => {
+    const http = await import("http");
+    const fs = await import("fs");
+    const os = await import("os");
+    const path = await import("path");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "unix-http-"));
+    const sock = path.join(dir, "s.sock");
+    let seenPath = "";
+    const server = http.createServer((req, res) => {
+      seenPath = req.url || "";
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ echo: JSON.parse(body).x }));
+      });
+    });
+    await new Promise<void>((r) => server.listen(sock, r));
+    try {
+      const { postUnix, isUnixBaseUrl } = await import("../conway/unix-http.js");
+      expect(isUnixBaseUrl(`unix:${sock}`)).toBe(true);
+      const resp = await postUnix(`unix:${sock}`, "/v1/chat/completions", {}, JSON.stringify({ x: 7 }), 5_000);
+      expect(resp.ok).toBe(true);
+      expect(await resp.json()).toEqual({ echo: 7 });
+      expect(seenPath).toBe("/v1/chat/completions");
+    } finally {
+      server.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
