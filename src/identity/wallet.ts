@@ -17,6 +17,7 @@ import type { WalletData } from "../types.js";
 import type { ChainType } from "./chain.js";
 import { EvmChainIdentity, SolanaChainIdentity } from "./chain.js";
 import type { ChainIdentity } from "./chain.js";
+import { enforceAutomatonPermissions } from "../sandbox/local-sandbox.js";
 
 /**
  * Create a stub PrivateKeyAccount for Solana wallets.
@@ -83,6 +84,8 @@ export async function getWallet(chainType?: ChainType): Promise<{
   if (!fs.existsSync(AUTOMATON_DIR)) {
     fs.mkdirSync(AUTOMATON_DIR, { recursive: true, mode: 0o700 });
   }
+  // Pre-existing dir/wallet may have loose modes from older versions.
+  enforceAutomatonPermissions(AUTOMATON_DIR);
 
   if (fs.existsSync(WALLET_FILE)) {
     const walletData: WalletData = JSON.parse(
@@ -118,6 +121,7 @@ export async function getWallet(chainType?: ChainType): Promise<{
     fs.writeFileSync(WALLET_FILE, JSON.stringify(walletData, null, 2), {
       mode: 0o600,
     });
+    fs.chmodSync(WALLET_FILE, 0o600);
 
     const account = createSolanaStubAccount(address);
     return { account, chainIdentity: solanaIdentity, chainType: "solana", isNew: true };
@@ -136,6 +140,7 @@ export async function getWallet(chainType?: ChainType): Promise<{
   fs.writeFileSync(WALLET_FILE, JSON.stringify(walletData, null, 2), {
     mode: 0o600,
   });
+  fs.chmodSync(WALLET_FILE, 0o600);
 
   return { account, chainIdentity: new EvmChainIdentity(account), chainType: "evm", isNew: true };
 }

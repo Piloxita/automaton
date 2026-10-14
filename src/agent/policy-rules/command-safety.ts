@@ -2,8 +2,9 @@
  * Command Safety Policy Rules
  *
  * Detects shell injection attempts and forbidden command patterns.
- * These rules are the primary defense; isForbiddenCommand() in tools.ts
- * is kept as defense-in-depth.
+ * This list is the single source of truth: tools.ts reuses it for its
+ * inline defence-in-depth check. Neither is a security boundary (regexes are
+ * bypassable); isolation is enforced by sandbox/local-sandbox.ts.
  */
 
 import type { PolicyRule, PolicyRequest, PolicyRuleResult } from "../../types.js";
@@ -57,11 +58,16 @@ const FORBIDDEN_COMMAND_PATTERNS: { pattern: RegExp; description: string }[] = [
   { pattern: />\s*.*injection-defense/, description: "Overwrite injection defense" },
   { pattern: />\s*.*self-mod\/code/, description: "Overwrite self-mod code" },
   { pattern: />\s*.*audit-log/, description: "Overwrite audit log" },
-  // Credential harvesting
-  { pattern: /cat\s+.*\.ssh/, description: "Read SSH keys" },
-  { pattern: /cat\s+.*\.gnupg/, description: "Read GPG keys" },
-  { pattern: /cat\s+.*\.env/, description: "Read environment file" },
-  { pattern: /cat\s+.*wallet\.json/, description: "Read wallet file" },
+  // Credential harvesting. Defence-in-depth only: the real boundary is that the
+  // local exec jail (sandbox/local-sandbox.ts) never mounts ~/.automaton, so
+  // any reference to these files (cat, head, jq, cp, node -e, ...) is denied.
+  { pattern: /\.ssh\b/, description: "Access SSH keys" },
+  { pattern: /\.gnupg\b/, description: "Access GPG keys" },
+  { pattern: /\b(cat|head|tail|less|more|cp|mv|strings|xxd|od|base64|grep|egrep|source|jq|awk|sed|bat|nl|tac|dd|tee)\s+.*\.env\b/, description: "Read environment file" },
+  { pattern: /wallet\.json/, description: "Access wallet file" },
+  { pattern: /automaton\.json/, description: "Access automaton config" },
+  { pattern: /state\.db/, description: "Access state database" },
+  { pattern: /\/proc\/[^\s]*\/environ/, description: "Read process environment" },
   // Policy engine modification via shell
   { pattern: /sed\s+.*policy-engine/, description: "Modify policy engine via sed" },
   { pattern: /sed\s+.*policy-rules/, description: "Modify policy rules via sed" },

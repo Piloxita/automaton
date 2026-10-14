@@ -6,9 +6,8 @@
  * Adapted from @aiws/sdk patterns.
  */
 
-import { execSync } from "child_process";
-import fs from "fs";
-import nodePath from "path";
+import { createLocalSandbox } from "../sandbox/local-sandbox.js";
+import type { LocalExecMode } from "../sandbox/local-sandbox.js";
 import type {
   ConwayClient,
   ExecResult,
@@ -33,6 +32,10 @@ interface ConwayClientOptions {
   apiUrl: string;
   apiKey: string;
   sandboxId: string;
+  /** Local execution mode when sandboxId is empty. Unset = bwrap if installed, else disabled. */
+  localExecMode?: LocalExecMode;
+  /** Host dir bound at /workspace in local mode (default ~/.automaton/workspace). */
+  localWorkspaceDir?: string;
 }
 
 export function createConwayClient(options: ConwayClientOptions): ConwayClient {
@@ -104,33 +107,22 @@ export function createConwayClient(options: ConwayClientOptions): ConwayClient {
 
 
   // ─── Sandbox Operations (own sandbox) ────────────────────────
-  // When sandboxId is empty, automatically fall back to local execution.
+  // When sandboxId is empty, execution is isolated locally (bubblewrap) and
+  // file access is confined to the workspace dir. See sandbox/local-sandbox.ts.
 
   const isLocal = !sandboxId;
-
-  const execLocal = (command: string, timeout?: number): ExecResult => {
-    try {
-      const stdout = execSync(command, {
-        timeout: timeout || 30_000,
-        encoding: "utf-8",
-        maxBuffer: 10 * 1024 * 1024,
-        cwd: process.env.HOME || "/root",
-      });
-      return { stdout: stdout || "", stderr: "", exitCode: 0 };
-    } catch (err: any) {
-      return {
-        stdout: err.stdout || "",
-        stderr: err.stderr || err.message || "",
-        exitCode: err.status ?? 1,
-      };
-    }
-  };
+  const localSandbox = isLocal
+    ? createLocalSandbox({
+        mode: options.localExecMode,
+        workspaceDir: options.localWorkspaceDir,
+      })
+    : null;
 
   const exec = async (
     command: string,
     timeout?: number,
   ): Promise<ExecResult> => {
-    if (isLocal) return execLocal(command, timeout);
+    if (localSandbox) return localSandbox.exec(command, timeout);
 
     // Remote sandboxes default to / as cwd. Wrap commands to run from /root
     // (matching local exec behavior) unless the command already sets a directory.
@@ -163,22 +155,12 @@ export function createConwayClient(options: ConwayClientOptions): ConwayClient {
     }
   };
 
-  const resolveLocalPath = (filePath: string): string =>
-    filePath.startsWith("~")
-      ? nodePath.join(process.env.HOME || "/root", filePath.slice(1))
-      : filePath;
-
   const writeFile = async (
     filePath: string,
     content: string,
   ): Promise<void> => {
-    if (isLocal) {
-      const resolved = resolveLocalPath(filePath);
-      const dir = nodePath.dirname(resolved);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-      fs.writeFileSync(resolved, content, "utf-8");
+    if (localSandbox) {
+      localSandbox.writeFile(filePath, content);
       return;
     }
     try {
@@ -199,9 +181,7 @@ export function createConwayClient(options: ConwayClientOptions): ConwayClient {
   };
 
   const readFile = async (filePath: string): Promise<string> => {
-    if (isLocal) {
-      return fs.readFileSync(resolveLocalPath(filePath), "utf-8");
-    }
+    if (localSandbox) return localSandbox.readFile(filePath);
     try {
       const result = await request(
         "GET",

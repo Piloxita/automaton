@@ -6,16 +6,22 @@
  * paths (edit_own_file vs write_file) by unifying protection.
  */
 
+import fs from "fs";
+import os from "os";
 import path from "path";
 import type { PolicyRule, PolicyRequest, PolicyRuleResult } from "../../types.js";
 import { isProtectedFile } from "../../self-mod/code.js";
+import { getAutomatonDir } from "../../identity/wallet.js";
 
-/** Sensitive files that must not be read by the agent */
+/** Sensitive file names that must not be read by the agent (exact basename) */
 const SENSITIVE_READ_PATTERNS: string[] = [
   "wallet.json",
   "config.json",
   ".env",
   "automaton.json",
+  "state.db",
+  "state.db-wal",
+  "state.db-shm",
 ];
 
 /** Glob-like suffix patterns that block reads */
@@ -27,32 +33,91 @@ const SENSITIVE_SUFFIX_PATTERNS: string[] = [
 /** Prefix patterns for sensitive reads */
 const SENSITIVE_PREFIX_PATTERNS: string[] = [
   "private-key",
+  ".env.",
 ];
+
+/** Directories (relative to $HOME) whose entire subtree is off-limits for reads */
+const SENSITIVE_HOME_DIRS: string[] = [".ssh", ".gnupg", ".config"];
 
 function deny(rule: string, reasonCode: string, humanMessage: string): PolicyRuleResult {
   return { rule, action: "deny", reasonCode, humanMessage };
 }
 
+function expandTilde(p: string, home: string): string {
+  return p === "~" || p.startsWith("~/") ? path.join(home, p.slice(1)) : p;
+}
+
 /**
- * Check if a file path matches a sensitive read pattern.
+ * Resolve symlinks for the deepest existing ancestor of `p` and re-append the
+ * non-existent remainder. Never throws: unresolvable paths fall back to the
+ * lexical form (the caller checks both forms).
+ */
+function realpathLoose(p: string): string {
+  let cur = p;
+  const tail: string[] = [];
+  for (let i = 0; i < 4096; i++) {
+    try {
+      const real = fs.realpathSync(cur);
+      return tail.length ? path.join(real, ...tail) : real;
+    } catch {
+      const parent = path.dirname(cur);
+      if (parent === cur) return p;
+      tail.unshift(path.basename(cur));
+      cur = parent;
+    }
+  }
+  return p;
+}
+
+function isUnder(root: string, candidate: string): boolean {
+  return candidate === root || candidate.startsWith(root + path.sep);
+}
+
+function matchesSensitiveName(resolved: string): boolean {
+  const basename = path.basename(resolved);
+  if (SENSITIVE_READ_PATTERNS.includes(basename)) return true;
+  if (SENSITIVE_SUFFIX_PATTERNS.some((s) => basename.endsWith(s))) return true;
+  if (SENSITIVE_PREFIX_PATTERNS.some((s) => basename.startsWith(s))) return true;
+  return false;
+}
+
+/**
+ * Check if a file path is sensitive. Both the lexical path and its realpath
+ * (symlinks and ../ resolved) are checked, so a harmless-looking symlink to
+ * wallet.json is still caught. Covers wallet, config, .env, the state db,
+ * ~/.ssh, ~/.gnupg, ~/.config and everything under the automaton directory
+ * except its workspace.
  */
 export function isSensitiveFile(filePath: string): boolean {
-  const resolved = path.resolve(filePath);
-  const basename = path.basename(resolved);
+  const homes = new Set<string>();
+  if (process.env.HOME) homes.add(path.resolve(process.env.HOME));
+  homes.add(path.resolve(os.homedir()));
+  const home = [...homes][0];
 
-  // Exact file name matches
-  for (const pattern of SENSITIVE_READ_PATTERNS) {
-    if (basename === pattern) return true;
-  }
+  const automatonDirs = new Set<string>([path.resolve(getAutomatonDir())]);
+  for (const h of homes) automatonDirs.add(path.join(h, ".automaton"));
 
-  // Suffix matches (.key, .pem)
-  for (const suffix of SENSITIVE_SUFFIX_PATTERNS) {
-    if (basename.endsWith(suffix)) return true;
-  }
+  const lexical = path.resolve(expandTilde(filePath, home));
+  const candidates = new Set<string>([lexical, realpathLoose(lexical)]);
 
-  // Prefix matches (private-key*)
-  for (const prefix of SENSITIVE_PREFIX_PATTERNS) {
-    if (basename.startsWith(prefix)) return true;
+  for (const candidate of candidates) {
+    if (matchesSensitiveName(candidate)) return true;
+
+    for (const h of homes) {
+      for (const rel of SENSITIVE_HOME_DIRS) {
+        for (const root of new Set([path.join(h, rel), realpathLoose(path.join(h, rel))])) {
+          if (isUnder(root, candidate)) return true;
+        }
+      }
+    }
+
+    for (const dir of automatonDirs) {
+      for (const root of new Set([dir, realpathLoose(dir)])) {
+        if (!isUnder(root, candidate)) continue;
+        const workspace = path.join(root, "workspace");
+        if (!isUnder(workspace, candidate)) return true;
+      }
+    }
   }
 
   return false;

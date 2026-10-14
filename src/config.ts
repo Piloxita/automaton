@@ -12,6 +12,7 @@ import { getAutomatonDir } from "./identity/wallet.js";
 import { loadApiKeyFromConfig } from "./identity/provision.js";
 import { createLogger } from "./observability/logger.js";
 import type { ChainType } from "./identity/chain.js";
+import { enforceAutomatonPermissions } from "./sandbox/local-sandbox.js";
 
 const logger = createLogger("config");
 const CONFIG_FILENAME = "automaton.json";
@@ -99,6 +100,8 @@ export function saveConfig(config: AutomatonConfig): void {
   fs.writeFileSync(configPath, JSON.stringify(toSave, null, 2), {
     mode: 0o600,
   });
+  // writeFileSync only applies `mode` on creation; tighten pre-existing files/dir.
+  enforceAutomatonPermissions(dir);
 }
 
 /**

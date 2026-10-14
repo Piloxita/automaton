@@ -238,11 +238,28 @@ async function run(): Promise<void> {
     db.setIdentity("automatonId", automatonId);
   }
 
+  // Local execution mode (only relevant when no remote sandbox is configured)
+  if (!config.sandboxId) {
+    const { resolveLocalExecMode, LOCAL_EXEC_DISABLED_MESSAGE } = await import("./sandbox/local-sandbox.js");
+    const localMode = resolveLocalExecMode(config.localExecMode);
+    if (localMode === "unsafe-host") {
+      logger.warn(
+        "!!! localExecMode=unsafe-host: shell commands run DIRECTLY ON THIS HOST with no isolation. " +
+          "The agent can read your wallet key, config and any file you can. Use only if you accept that risk.",
+      );
+    } else if (localMode === "disabled") {
+      logger.warn(LOCAL_EXEC_DISABLED_MESSAGE);
+    } else {
+      logger.info("Local command execution isolated with bubblewrap (workspace: ~/.automaton/workspace)");
+    }
+  }
+
   // Create Conway client
   const conway = createConwayClient({
     apiUrl: config.conwayApiUrl,
     apiKey,
     sandboxId: config.sandboxId,
+    localExecMode: config.localExecMode,
   });
 
   // Register automaton identity (one-time, immutable)

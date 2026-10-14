@@ -75,6 +75,14 @@ export interface AutomatonConfig {
   rpcUrl?: string;
   /** Chain type for this automaton. Defaults to "evm" if absent. */
   chainType?: ChainType;
+  /**
+   * How shell commands run when no remote sandbox (sandboxId) is configured.
+   * "bwrap": bubblewrap jail, only ~/.automaton/workspace is writable.
+   * "disabled": exec refuses to run. "unsafe-host": legacy unisolated host
+   * execution (explicit opt-in only). Default when unset: "bwrap" if bwrap is
+   * on PATH, else "disabled" (resolved in sandbox/local-sandbox.ts).
+   */
+  localExecMode?: "bwrap" | "disabled" | "unsafe-host";
 }
 
 export const DEFAULT_CONFIG: Partial<AutomatonConfig> = {

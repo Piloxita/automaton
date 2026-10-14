@@ -22,6 +22,8 @@ import type {
 import type { PolicyEngine } from "./policy-engine.js";
 import { sanitizeToolResult, sanitizeInput } from "./injection-defense.js";
 import { createLogger } from "../observability/logger.js";
+import { getForbiddenCommandMatch } from "./policy-rules/command-safety.js";
+import { isSensitiveFile } from "./policy-rules/path-protection.js";
 
 const logger = createLogger("tools");
 
@@ -58,44 +60,14 @@ const EXTERNAL_SOURCE_TOOLS = new Set([
 ]);
 
 // ─── Self-Preservation Guard ───────────────────────────────────
-// Defense-in-depth: policy engine (command.forbidden_patterns rule) is the primary guard.
-// This inline check is kept as a secondary safety net in case the policy engine is bypassed.
-
-const FORBIDDEN_COMMAND_PATTERNS = [
-  // Self-destruction
-  /rm\s+(-rf?\s+)?.*\.automaton/,
-  /rm\s+(-rf?\s+)?.*state\.db/,
-  /rm\s+(-rf?\s+)?.*wallet\.json/,
-  /rm\s+(-rf?\s+)?.*automaton\.json/,
-  /rm\s+(-rf?\s+)?.*heartbeat\.yml/,
-  /rm\s+(-rf?\s+)?.*SOUL\.md/,
-  // Process killing
-  /kill\s+.*automaton/,
-  /pkill\s+.*automaton/,
-  /systemctl\s+(stop|disable)\s+automaton/,
-  // Database destruction
-  /DROP\s+TABLE/i,
-  /DELETE\s+FROM\s+(turns|identity|kv|schema_version|skills|children|registry)/i,
-  /TRUNCATE/i,
-  // Safety infrastructure modification via shell
-  /sed\s+.*injection-defense/,
-  /sed\s+.*self-mod\/code/,
-  /sed\s+.*audit-log/,
-  />\s*.*injection-defense/,
-  />\s*.*self-mod\/code/,
-  />\s*.*audit-log/,
-  // Credential harvesting
-  /cat\s+.*\.ssh/,
-  /cat\s+.*\.gnupg/,
-  /cat\s+.*\.env/,
-  /cat\s+.*wallet\.json/,
-];
+// Defense-in-depth: the policy engine (command.forbidden_patterns rule) is the primary guard.
+// This inline check reuses the same pattern list (single source of truth) in case the
+// policy engine is bypassed. The actual isolation boundary is the local exec sandbox.
 
 function isForbiddenCommand(command: string, sandboxId: string): string | null {
-  for (const pattern of FORBIDDEN_COMMAND_PATTERNS) {
-    if (pattern.test(command)) {
-      return `Blocked: Command matches self-harm pattern: ${pattern.source}`;
-    }
+  const match = getForbiddenCommandMatch(command);
+  if (match) {
+    return `Blocked: Command matches self-harm pattern: ${match.pattern}`;
   }
 
   // Block deleting own sandbox
@@ -184,15 +156,8 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
       },
       execute: async (args, ctx) => {
         const filePath = args.path as string;
-        // Block reads of sensitive files (wallet, env, config secrets)
-        const basename = filePath.split("/").pop() || "";
-        const sensitiveFiles = ["wallet.json", ".env", "automaton.json"];
-        const sensitiveExtensions = [".key", ".pem"];
-        if (
-          sensitiveFiles.includes(basename) ||
-          sensitiveExtensions.some((ext) => basename.endsWith(ext)) ||
-          basename.startsWith("private-key")
-        ) {
+        // Block reads of sensitive files (wallet, env, config secrets). Realpath-based.
+        if (isSensitiveFile(filePath)) {
           return "Blocked: Cannot read sensitive file. This protects credentials and secrets.";
         }
         try {
