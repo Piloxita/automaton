@@ -20,7 +20,7 @@ import type {
   SpendTrackerInterface,
 } from "../types.js";
 import type { PolicyEngine } from "./policy-engine.js";
-import { sanitizeToolResult, sanitizeInput } from "./injection-defense.js";
+import { sanitizeToolResult, sanitizeInput, wrapUntrustedToolResult } from "./injection-defense.js";
 import { createLogger } from "../observability/logger.js";
 
 const logger = createLogger("tools");
@@ -51,10 +51,26 @@ function confinePathToSandbox(filePath: string): string | { error: string } {
 }
 
 // Tools whose results come from external sources and need sanitization
-const EXTERNAL_SOURCE_TOOLS = new Set([
+export const EXTERNAL_SOURCE_TOOLS: ReadonlySet<string> = new Set([
   "exec",
-  "web_fetch",
-  "check_social_inbox",
+  "read_file",
+  "x402_fetch",
+  "discover_agents",
+  "check_reputation",
+  "search_domains",
+  "manage_dns",
+  "list_models",
+  "git_clone",
+  "git_log",
+  "git_diff",
+  "git_status",
+  "git_branch",
+  "install_skill",
+  "install_mcp_server",
+  "install_npm_package",
+  "review_upstream_changes",
+  "check_child_status",
+  "message_child",
 ]);
 
 // ─── Self-Preservation Guard ───────────────────────────────────
@@ -503,11 +519,16 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
       riskLevel: "dangerous",
       parameters: { type: "object", properties: {} },
       execute: async (_args, ctx) => {
+        const { resolveUpstream, UPSTREAM_TRACKING_REF, SAFE_INSTALL_AND_BUILD_COMMAND } =
+          await import("../self-mod/upstream.js");
+        const resolved = resolveUpstream(ctx.config);
+        if ("error" in resolved) return `Blocked: ${resolved.error}`;
+        const { url, ref } = resolved.target;
         const repoRoot = process.cwd();
 
-        // Fetch latest upstream
+        // Fetch the creator-configured upstream (never a hardcoded repo)
         const fetch = await ctx.conway.exec(
-          `cd '${repoRoot}' && git fetch origin main`,
+          `cd '${repoRoot}' && git fetch --no-tags '${url}' '+${ref}:${UPSTREAM_TRACKING_REF}'`,
           30_000,
         );
         if (fetch.exitCode !== 0) {
@@ -516,28 +537,28 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
 
         // Record what we're about to lose
         const localCommits = await ctx.conway.exec(
-          `cd '${repoRoot}' && git log origin/main..HEAD --oneline`,
+          `cd '${repoRoot}' && git log ${UPSTREAM_TRACKING_REF}..HEAD --oneline`,
           10_000,
         );
 
         // Hard reset
         const reset = await ctx.conway.exec(
-          `cd '${repoRoot}' && git reset --hard origin/main`,
+          `cd '${repoRoot}' && git reset --hard ${UPSTREAM_TRACKING_REF}`,
           30_000,
         );
         if (reset.exitCode !== 0) {
           return `Reset failed: ${reset.stderr}`;
         }
 
-        // Reinstall + rebuild
+        // Reinstall (no dependency lifecycle scripts, except the allowlist) + rebuild
         const build = await ctx.conway.exec(
-          `cd '${repoRoot}' && npm install && npm run build`,
+          `cd '${repoRoot}' && ${SAFE_INSTALL_AND_BUILD_COMMAND}`,
           120_000,
         );
 
         // Audit log
         const { logModification } = await import("../self-mod/audit-log.js");
-        logModification(ctx.db, "upstream_reset", "Reset to upstream origin/main", {
+        logModification(ctx.db, "upstream_reset", `Reset to configured upstream ${url} (${ref})`, {
           diff: localCommits.stdout.trim() || "(no local commits)",
           reversible: false,
         });
@@ -593,10 +614,12 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
       riskLevel: "caution",
       parameters: { type: "object", properties: {} },
       execute: async (_args, _ctx) => {
-        const { getUpstreamDiffs, checkUpstream } =
+        const { getUpstreamDiffs, checkUpstream, resolveUpstream } =
           await import("../self-mod/upstream.js");
-        const status = checkUpstream();
-        if (status.behind === 0) return "Already up to date with origin/main.";
+        const resolved = resolveUpstream(_ctx.config);
+        if ("error" in resolved) return `Blocked: ${resolved.error}`;
+        const status = checkUpstream(resolved.target);
+        if (status.behind === 0) return "Already up to date with the configured upstream.";
 
         const diffs = getUpstreamDiffs();
         if (diffs.length === 0) return "No upstream diffs found.";
@@ -630,6 +653,15 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
       execute: async (args, ctx) => {
         const commit = args.commit as string | undefined;
 
+        const { resolveUpstream, UPSTREAM_TRACKING_REF, SAFE_INSTALL_AND_BUILD_COMMAND } =
+          await import("../self-mod/upstream.js");
+        const resolved = resolveUpstream(ctx.config);
+        if ("error" in resolved) return `Blocked: ${resolved.error}`;
+        const { url, ref } = resolved.target;
+        if (commit !== undefined && !/^[0-9a-f]{7,40}$/i.test(commit)) {
+          return `Blocked: invalid commit hash "${commit}"`;
+        }
+
         // Run git commands inside sandbox via conway.exec()
         const run = async (cmd: string) => {
           const result = await ctx.conway.exec(cmd, 120_000);
@@ -644,20 +676,23 @@ export function createBuiltinTools(sandboxId: string): AutomatonTool[] {
 
         let appliedSummary: string;
         try {
+          await run(`git fetch --no-tags '${url}' '+${ref}:${UPSTREAM_TRACKING_REF}'`);
           if (commit) {
+            // Only commits that are actually on the configured upstream may be picked
+            await run(`git merge-base --is-ancestor ${commit} ${UPSTREAM_TRACKING_REF}`);
             await run(`git cherry-pick ${commit}`);
             appliedSummary = `Cherry-picked ${commit}`;
           } else {
-            await run("git pull origin main --ff-only");
-            appliedSummary = "Pulled all of origin/main (fast-forward)";
+            await run(`git merge --ff-only ${UPSTREAM_TRACKING_REF}`);
+            appliedSummary = `Pulled all of the configured upstream (${ref}, fast-forward)`;
           }
         } catch (err: any) {
           return `Git operation failed: ${err.message}. You may need to resolve conflicts manually.`;
         }
 
-        // Rebuild
+        // Rebuild (no dependency lifecycle scripts, except the allowlist)
         try {
-          await run("npm install --ignore-scripts && npm run build");
+          await run(SAFE_INSTALL_AND_BUILD_COMMAND);
         } catch (err: any) {
           return `${appliedSummary} — but rebuild failed: ${err.message}. The code is applied but not compiled.`;
         }
@@ -1648,6 +1683,7 @@ Model: ${ctx.inference.getDefaultModel()}
             ctx.db,
             genesis,
             lifecycle,
+            { config: ctx.config },
           );
         } catch (err: any) {
           // Auto-topup on 402 insufficient credits and retry once
@@ -1681,6 +1717,7 @@ Model: ${ctx.inference.getDefaultModel()}
                   ctx.db,
                   retryGenesis,
                   retryLifecycle,
+                  { config: ctx.config },
                 );
               }
             }
@@ -2353,6 +2390,26 @@ Model: ${ctx.inference.getDefaultModel()}
         const content = args.content as string;
         const reason = args.reason as string;
 
+        const { checkAndRecordSoulUpdate, diffForAudit } = await import("../self-mod/soul-guard.js");
+        const { logModification } = await import("../self-mod/audit-log.js");
+        const guard = checkAndRecordSoulUpdate(ctx.db, ctx.config, String(content ?? ""), String(reason ?? ""));
+        if (!guard.allowed) {
+          logModification(ctx.db, "soul_update", `REFUSED soul update to "${section}": ${guard.error}`, {
+            reversible: false,
+          });
+          return `Blocked: ${guard.error}`;
+        }
+
+        let previous = "";
+        try {
+          const { loadCurrentSoul } = await import("../soul/model.js");
+          const prior = loadCurrentSoul(ctx.db.raw) as unknown as Record<string, unknown> | null;
+          const prev = prior?.[section];
+          previous = typeof prev === "string" ? prev : prev === undefined ? "" : JSON.stringify(prev, null, 1);
+        } catch {
+          // previous content unavailable; diff will show full new content
+        }
+
         const updates: Record<string, unknown> = {};
         if (
           ["values", "behavioralGuidelines", "boundaries"].includes(section)
@@ -2376,6 +2433,10 @@ Model: ${ctx.inference.getDefaultModel()}
           reason,
         );
         if (result.success) {
+          logModification(ctx.db, "soul_update", `Soul section "${section}" updated (version ${result.version}): ${reason}`, {
+            diff: diffForAudit(previous, content),
+            reversible: true,
+          });
           return `Soul updated: ${section} (version ${result.version}). Reason: ${reason}`;
         }
         return `Soul update failed: ${result.errors?.join(", ") || "Unknown error"}`;
@@ -3341,14 +3402,15 @@ export async function executeTool(
 
   try {
     let result = await tool.execute(args, context);
+    const toolBlocked = result.startsWith("Blocked:");
 
-    // Sanitize results from external source tools
+    // Sanitize and wrap results from external source tools as untrusted data
     if (EXTERNAL_SOURCE_TOOLS.has(toolName)) {
-      result = sanitizeToolResult(result);
+      result = wrapUntrustedToolResult(toolName, result);
     }
 
     // Record spend for financial operations
-    if (turnContext && !result.startsWith("Blocked:")) {
+    if (turnContext && !toolBlocked) {
       if (toolName === "transfer_credits") {
         const amount = args.amount_cents as number | undefined;
         if (amount && amount > 0) {

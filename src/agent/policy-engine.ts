@@ -123,7 +123,12 @@ export class PolicyEngine {
   static deriveAuthorityLevel(
     inputSource: InputSource | undefined,
   ): AuthorityLevel {
-    if (inputSource === undefined || inputSource === "heartbeat") {
+    // "social" (public relay) and any unrecognised source map to the lowest authority.
+    if (
+      inputSource === undefined ||
+      inputSource === "heartbeat" ||
+      inputSource === "social"
+    ) {
       return "external";
     }
     if (inputSource === "creator" || inputSource === "agent") {

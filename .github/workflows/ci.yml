@@ -21,8 +21,8 @@ jobs:
           timeout 300 pnpm test
           RC=$?
           set -e
-          # Exit code 124 means timeout killed the process (vitest hung after tests completed)
-          if [ $RC -eq 124 ]; then echo "::warning::vitest process hung after tests, killed by timeout"; exit 0; fi
+          # Exit code 124 means the timeout killed a hung vitest process: that is a failure
+          if [ $RC -eq 124 ]; then echo "::error::vitest timed out (hang)"; fi
           exit $RC
       - name: Run security tests
         timeout-minutes: 10
@@ -31,7 +31,7 @@ jobs:
           timeout 180 pnpm test -- --grep "security|injection|policy|financial"
           RC=$?
           set -e
-          if [ $RC -eq 124 ]; then echo "::warning::vitest process hung after tests, killed by timeout"; exit 0; fi
+          if [ $RC -eq 124 ]; then echo "::error::vitest timed out (hang)"; fi
           exit $RC
 
   security-audit:
@@ -43,4 +43,4 @@ jobs:
           node-version: 22
       - uses: pnpm/action-setup@v4
       - run: pnpm install --frozen-lockfile
-      - run: pnpm audit --audit-level=high || true
+      - run: pnpm audit --audit-level=high

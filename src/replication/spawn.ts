@@ -17,6 +17,71 @@ import type {
 import type { ChildLifecycle } from "./lifecycle.js";
 import { ulid } from "ulid";
 import { propagateConstitution } from "./constitution.js";
+import { execFileSync } from "child_process";
+import {
+  isSafeGitRef,
+  isSafeRepoUrl,
+  SAFE_INSTALL_AND_BUILD_COMMAND,
+} from "../self-mod/upstream.js";
+
+export type SpawnConfig = Pick<
+  AutomatonConfig,
+  "maxChildren" | "childSandboxMemoryMb" | "upstreamRepoUrl" | "childRepoRef"
+>;
+
+export interface SpawnOptions {
+  config?: Partial<SpawnConfig>;
+}
+
+const DEFAULT_MAX_CHILDREN = 3;
+
+function parentHeadCommit(): string {
+  return execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: process.cwd(),
+    encoding: "utf-8",
+    timeout: 10_000,
+  }).trim();
+}
+
+/**
+ * Build the command that installs the runtime in a child sandbox: clone the
+ * creator-configured repo at a pinned commit (config.childRepoRef, else the
+ * parent's own HEAD), then install from the lockfile without lifecycle
+ * scripts (except the better-sqlite3 allowlist). Throws when no upstream is
+ * configured, so nothing is created in that case.
+ */
+export function buildChildInstallCommand(
+  config: Partial<SpawnConfig> | undefined,
+  getParentHead: () => string = parentHeadCommit,
+): string {
+  const url = config?.upstreamRepoUrl?.trim();
+  if (!url) {
+    throw new Error(
+      "Cannot spawn: no upstream configured. The creator must set upstreamRepoUrl in automaton.json (children are cloned from it at a pinned commit).",
+    );
+  }
+  if (!isSafeRepoUrl(url)) {
+    throw new Error("Cannot spawn: configured upstreamRepoUrl is not an acceptable git URL.");
+  }
+  const ref = config?.childRepoRef?.trim() || getParentHead();
+  if (!isSafeGitRef(ref)) {
+    throw new Error(`Cannot spawn: invalid childRepoRef/commit "${ref}".`);
+  }
+  return (
+    `git clone --no-checkout '${url}' /root/automaton && cd /root/automaton && ` +
+    `git checkout --detach '${ref}' && ${SAFE_INSTALL_AND_BUILD_COMMAND}`
+  );
+}
+
+async function installChildRuntime(
+  childConway: ConwayClient,
+  installCommand: string,
+): Promise<void> {
+  const result = await childConway.exec(installCommand, 300_000);
+  if (result.exitCode !== 0) {
+    throw new Error(`Child runtime install failed: ${(result.stderr || result.stdout || "").slice(0, 500)}`);
+  }
+}
 
 /** Valid Conway sandbox pricing tiers. */
 const SANDBOX_TIERS = [
@@ -58,7 +123,12 @@ export async function spawnChild(
   db: AutomatonDatabase,
   genesis: GenesisConfig,
   lifecycle?: ChildLifecycle,
+  options?: SpawnOptions,
 ): Promise<ChildAutomaton> {
+  const spawnConfig = options?.config;
+  // Fail before any sandbox is created when no upstream is configured
+  const installCommand = buildChildInstallCommand(spawnConfig);
+
   // Check child limit from config
   const existing = db
     .getChildren()
@@ -68,7 +138,7 @@ export async function spawnChild(
         c.status !== "cleaned_up" &&
         c.status !== "failed",
     );
-  const maxChildren = (db as any).config?.maxChildren ?? 3;
+  const maxChildren = spawnConfig?.maxChildren ?? DEFAULT_MAX_CHILDREN;
   if (existing.length >= maxChildren) {
     throw new Error(
       `Cannot spawn: already at max children (${maxChildren}). Kill or wait for existing children to die.`,
@@ -81,7 +151,7 @@ export async function spawnChild(
 
   // If no lifecycle provided, use legacy path
   if (!lifecycle) {
-    return spawnChildLegacy(conway, identity, db, genesis, childId);
+    return spawnChildLegacy(conway, identity, db, genesis, childId, spawnConfig, installCommand);
   }
 
   try {
@@ -90,7 +160,7 @@ export async function spawnChild(
     lifecycle.initChild(childId, genesis.name, "", genesis.genesisPrompt, childChainType);
 
     // Get child sandbox memory from config (default 1024MB)
-    const childMemoryMb = (db as any).config?.childSandboxMemoryMb ?? 1024;
+    const childMemoryMb = spawnConfig?.childSandboxMemoryMb ?? 1024;
 
     // Try to reuse an existing sandbox whose DB record is 'failed' but
     // is still running remotely, before creating a new one.
@@ -128,10 +198,7 @@ export async function spawnChild(
 
     // Install runtime (on the CHILD sandbox)
     await childConway.exec("apt-get update -qq && apt-get install -y -qq nodejs npm git curl", 120_000);
-    await childConway.exec(
-      "git clone https://github.com/Conway-Research/automaton.git /root/automaton && cd /root/automaton && npm install && npm run build",
-      180_000,
-    );
+    await installChildRuntime(childConway, installCommand);
 
     // Write genesis configuration (on the CHILD sandbox)
     await childConway.exec("mkdir -p /root/.automaton", 10_000);
@@ -244,11 +311,13 @@ async function spawnChildLegacy(
   db: AutomatonDatabase,
   genesis: GenesisConfig,
   childId: string,
+  spawnConfig: Partial<SpawnConfig> | undefined,
+  installCommand: string,
 ): Promise<ChildAutomaton> {
   let sandboxId: string | undefined;
 
   // Get child sandbox memory from config (default 1024MB)
-  const childMemoryMb = (db as any).config?.childSandboxMemoryMb ?? 1024;
+  const childMemoryMb = spawnConfig?.childSandboxMemoryMb ?? 1024;
 
   const legacyTier = selectSandboxTier(childMemoryMb);
 
@@ -268,10 +337,7 @@ async function spawnChildLegacy(
       "apt-get update -qq && apt-get install -y -qq nodejs npm git curl",
       120_000,
     );
-    await childConway.exec(
-      "git clone https://github.com/Conway-Research/automaton.git /root/automaton && cd /root/automaton && npm install && npm run build",
-      180_000,
-    );
+    await installChildRuntime(childConway, installCommand);
     await childConway.exec("mkdir -p /root/.automaton", 10_000);
 
     const legacyGenesisJson = JSON.stringify(

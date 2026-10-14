@@ -234,7 +234,7 @@ export async function runAgentLoop(
               });
 
               const lifecycle = new ChildLifecycle(db.raw);
-              const child = await spawnChild(conway, identity, db, genesis, lifecycle);
+              const child = await spawnChild(conway, identity, db, genesis, lifecycle, { config });
 
               return {
                 address: child.address,
@@ -385,6 +385,11 @@ export async function runAgentLoop(
   const maxCycleTurns = config.maxTurnsPerCycle ?? 25;
   let cycleTurnCount = 0;
 
+  // Turns following a social-relay message keep social (lowest) authority,
+  // since the model may still be acting on attacker-controlled text.
+  const SOCIAL_TAINT_TURNS = 3;
+  let socialTaintTurnsLeft = 0;
+
   let pendingInput: { content: string; source: string } | undefined = {
     content: wakeupInput,
     source: "wakeup",
@@ -421,7 +426,7 @@ export async function runAgentLoop(
               return `[Message from ${from.content}]: ${content.content}`;
             })
             .join("\n\n");
-          pendingInput = { content: formatted, source: "agent" };
+          pendingInput = { content: formatted, source: "social" };
         }
       }
 
@@ -591,6 +596,16 @@ export async function runAgentLoop(
 
       // Capture input before clearing
       const currentInput = pendingInput;
+      if (currentInput?.source === "social") {
+        socialTaintTurnsLeft = SOCIAL_TAINT_TURNS;
+      }
+      const effectiveInputSource: string | undefined =
+        currentInput?.source === "social" || socialTaintTurnsLeft > 0
+          ? "social"
+          : currentInput?.source;
+      if (currentInput?.source !== "social" && socialTaintTurnsLeft > 0) {
+        socialTaintTurnsLeft--;
+      }
 
       // Clear pending input after use
       pendingInput = undefined;
@@ -640,7 +655,7 @@ export async function runAgentLoop(
       if (response.toolCalls && response.toolCalls.length > 0) {
         const toolCallMessages: any[] = [];
         let callCount = 0;
-        const currentInputSource = currentInput?.source as InputSource | undefined;
+        const currentInputSource = effectiveInputSource as InputSource | undefined;
 
         for (const tc of response.toolCalls) {
           if (callCount >= MAX_TOOL_CALLS_PER_TURN) {

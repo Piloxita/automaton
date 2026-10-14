@@ -75,6 +75,15 @@ export interface AutomatonConfig {
   rpcUrl?: string;
   /** Chain type for this automaton. Defaults to "evm" if absent. */
   chainType?: ChainType;
+  /** Git URL of the upstream repo (set by the creator only). Unset = pull_upstream, reset_to_upstream and child spawning are disabled. */
+  upstreamRepoUrl?: string;
+  /** Branch or tag to track in upstreamRepoUrl. Default "main". */
+  upstreamRef?: string;
+  /** Commit (or tag) children are cloned at. Default: the parent's own HEAD commit. */
+  childRepoRef?: string;
+  /** update_soul limits. Defaults: 8000 bytes per update, 5 updates per hour. */
+  soulMaxContentBytes?: number;
+  soulMaxUpdatesPerHour?: number;
 }
 
 export const DEFAULT_CONFIG: Partial<AutomatonConfig> = {
@@ -120,7 +129,9 @@ export type InputSource =
   | "creator"
   | "agent"
   | "system"
-  | "wakeup";
+  | "wakeup"
+  /** Messages from the public social relay: lowest authority. */
+  | "social";
 
 export interface ToolCallResult {
   id: string;

@@ -5,6 +5,29 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+
+// discover_agents (used below) calls through to registry/discovery.js, which
+// without this mock performs real on-chain RPC calls against mainnet (no
+// test fixture stubs the chain). That made this file hit the live network
+// (taking 100s+ per call) in violation of the "tests must not hit the
+// network" rule and put the whole-suite 400s budget at risk. Mock the chain
+// layer the same way discovery-data-uri.test.ts and data-layer.test.ts do.
+vi.mock("../registry/erc8004.js", () => ({
+  queryAgent: vi.fn(),
+  getTotalAgents: vi.fn().mockResolvedValue(1),
+  registerAgent: vi.fn(),
+  leaveFeedback: vi.fn(),
+  getRegisteredAgentsByEvents: vi.fn().mockResolvedValue([
+    {
+      agentId: 1,
+      owner: "0x0000000000000000000000000000000000000001",
+      agentURI: "https://example.test/agent-card.json",
+      name: "Mock Agent",
+      description: "A mocked agent for tests.",
+    },
+  ]),
+}));
+
 import { runAgentLoop } from "../agent/loop.js";
 import { Orchestrator } from "../orchestration/orchestrator.js";
 import {
@@ -191,7 +214,12 @@ describe("Agent Loop", () => {
       (t) => t.input?.includes("Hello from another agent!"),
     );
     expect(inboxTurn).toBeDefined();
-    expect(inboxTurn!.inputSource).toBe("agent");
+    // Inbox/social-relay messages come from untrusted strangers, not from the
+    // agent itself: this is the vulnerability authority.md describes (such
+    // messages used to be tagged "agent" and so inherited agent-level
+    // authority, letting a stranger's message drive privileged tool calls).
+    // They must carry the lowest ("social") authority instead.
+    expect(inboxTurn!.inputSource).toBe("social");
   });
 
   it("MAX_TOOL_CALLS_PER_TURN limits tool calls", async () => {
@@ -708,7 +736,7 @@ describe("Agent Loop", () => {
     expect(enforcementTurn).toBeUndefined();
   });
 
-  it("discover_agents turns are retained in context (not classified as idle)", { timeout: 180_000 }, async () => {
+  it("discover_agents turns are retained in context (not classified as idle)", async () => {
     // A turn with only discover_agents should NOT trigger maintenance loop detection
     // because discover_agents is no longer in IDLE_ONLY_TOOLS
     function discoverResponse(uid: string): ReturnType<typeof toolCallResponse> {
