@@ -15,6 +15,8 @@ import {
   createTestIdentity,
   createTestConfig,
 } from "./mocks.js";
+import { SpendGuard, installSpendGuard } from "../survival/spend-guard.js";
+import { DEFAULT_TREASURY_POLICY } from "../types.js";
 import type { AutomatonDatabase, ToolContext, AutomatonTool, RiskLevel } from "../types.js";
 
 // Mock erc8004.js to avoid ABI parse error
@@ -525,6 +527,7 @@ describe("transfer_credits self-preservation", () => {
   });
 
   afterEach(() => {
+    installSpendGuard(null);
     db.close();
   });
 
@@ -539,6 +542,7 @@ describe("transfer_credits self-preservation", () => {
   });
 
   it("allows transfer of less than half balance", async () => {
+    installSpendGuard(new SpendGuard(db.raw, DEFAULT_TREASURY_POLICY));
     const transferTool = tools.find((t) => t.name === "transfer_credits")!;
     const result = await transferTool.execute(
       { to_address: "0xrecipient", amount_cents: 4000 },

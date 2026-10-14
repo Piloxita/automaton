@@ -129,6 +129,7 @@ export async function runSetupWizard(): Promise<AutomatonConfig> {
   console.log(chalk.dim("  These limits protect against unauthorized spending. Press Enter for defaults.\n"));
 
   const treasuryPolicy: TreasuryPolicy = {
+    ...DEFAULT_TREASURY_POLICY,
     maxSingleTransferCents: await promptWithDefault(
       "Max single transfer (cents)", DEFAULT_TREASURY_POLICY.maxSingleTransferCents),
     maxHourlyTransferCents: await promptWithDefault(

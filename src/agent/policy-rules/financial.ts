@@ -5,6 +5,7 @@
  * to prevent iterative credit drain and unauthorized payments.
  */
 
+import { getSpendGuard, type SpendKind } from "../../survival/spend-guard.js";
 import type {
   PolicyRule,
   PolicyRequest,
@@ -21,7 +22,35 @@ function deny(
 }
 
 /**
- * Deny x402 payments above the configured per-payment max.
+ * Spend kind and amount (cents) a tool call would move, when knowable from its args.
+ * x402 amounts come from the server's 402 response, so only a 1-cent probe is possible here;
+ * the exact amount is enforced inside x402Fetch via the SpendGuard.
+ */
+function spendProbe(request: PolicyRequest): { kind: SpendKind; amountCents: number } | null {
+  switch (request.tool.name) {
+    case "transfer_credits":
+      return typeof request.args.amount_cents === "number"
+        ? { kind: "transfer", amountCents: request.args.amount_cents }
+        : null;
+    case "fund_child":
+      return typeof request.args.amount_cents === "number"
+        ? { kind: "fund_child", amountCents: request.args.amount_cents }
+        : null;
+    case "topup_credits":
+      return typeof request.args.amount_usd === "number"
+        ? { kind: "topup", amountCents: request.args.amount_usd * 100 }
+        : null;
+    case "x402_fetch":
+      return { kind: "x402", amountCents: 1 };
+    default:
+      return null;
+  }
+}
+
+/**
+ * x402 payments above the per-payment max. The amount is only known after the server's
+ * 402 reply, so x402Fetch enforces it with the SpendGuard; this rule denies up front when
+ * x402 is disabled (max <= 0) or the hourly/daily envelope is already exhausted.
  */
 function createX402MaxSingleRule(policy: TreasuryPolicy): PolicyRule {
   return {
@@ -30,11 +59,19 @@ function createX402MaxSingleRule(policy: TreasuryPolicy): PolicyRule {
     priority: 500,
     appliesTo: { by: "name", names: ["x402_fetch"] },
     evaluate(request: PolicyRequest): PolicyRuleResult | null {
-      // The amount is checked pre-payment in x402Fetch itself,
-      // but we also enforce via policy for the declared max.
-      // x402 payment amounts aren't in tool args — they come from the server.
-      // This rule serves as a policy declaration; actual enforcement
-      // happens in x402Fetch when maxPaymentCents is injected.
+      if (policy.maxX402PaymentCents <= 0) {
+        return deny(
+          "financial.x402_max_single",
+          "SPEND_LIMIT_EXCEEDED",
+          "x402 payments are disabled (maxX402PaymentCents is 0)",
+        );
+      }
+      const guard = getSpendGuard();
+      if (!guard) return null;
+      const check = guard.preview("x402", 1);
+      if (!check.allowed && check.code && check.code !== "RESERVE_VIOLATION") {
+        return deny("financial.x402_max_single", "SPEND_LIMIT_EXCEEDED", check.reason ?? "x402 spend cap reached");
+      }
       return null;
     },
   };
@@ -177,6 +214,8 @@ function createTransferDailyCapRule(policy: TreasuryPolicy): PolicyRule {
 
 /**
  * Deny any financial operation that would bring balance below minimum reserve.
+ * Uses the SpendGuard's most recent balance reading; when no reading exists the
+ * guard itself denies at execution time (unknown balance fails closed).
  */
 function createMinimumReserveRule(policy: TreasuryPolicy): PolicyRule {
   return {
@@ -185,24 +224,39 @@ function createMinimumReserveRule(policy: TreasuryPolicy): PolicyRule {
     priority: 500,
     appliesTo: {
       by: "name",
-      names: ["transfer_credits", "x402_fetch", "fund_child"],
+      names: ["transfer_credits", "x402_fetch", "fund_child", "topup_credits"],
     },
     evaluate(request: PolicyRequest): PolicyRuleResult | null {
-      // For transfer_credits and fund_child, we can check from args
-      const amount = request.args.amount_cents as number | undefined;
-      if (amount === undefined) return null;
+      const probe = spendProbe(request);
+      const guard = getSpendGuard();
+      if (!probe || !guard) return null;
+      const check = guard.preview(probe.kind, probe.amountCents);
+      if (!check.allowed && check.code === "RESERVE_VIOLATION") {
+        return deny("financial.minimum_reserve", "MINIMUM_RESERVE", check.reason ?? "minimum reserve would be violated");
+      }
+      return null;
+    },
+  };
+}
 
-      // We need the current balance from context
-      // The balance check is done inside the tool execute function,
-      // but we can check spend tracker totals as an additional guard
-      const spendTracker = request.turnContext.sessionSpend;
-      const hourlySpend = spendTracker.getHourlySpend("transfer");
-      const dailySpend = spendTracker.getDailySpend("transfer");
-
-      // This rule is a declaration — actual balance checking
-      // requires the async getCreditsBalance call which happens
-      // inside the tool execution. The tool itself has a guard
-      // (cannot transfer more than half balance).
+/**
+ * Deny child funding and credit top-ups that exceed the SpendGuard caps.
+ * (Transfers and x402 have their own rules above.)
+ */
+function createGuardCapsRule(_policy: TreasuryPolicy): PolicyRule {
+  return {
+    id: "financial.guard_caps",
+    description: "Deny fund_child / topup_credits above the treasury caps",
+    priority: 500,
+    appliesTo: { by: "name", names: ["fund_child", "topup_credits"] },
+    evaluate(request: PolicyRequest): PolicyRuleResult | null {
+      const probe = spendProbe(request);
+      const guard = getSpendGuard();
+      if (!probe || !guard) return null;
+      const check = guard.preview(probe.kind, probe.amountCents);
+      if (!check.allowed && check.code !== "RESERVE_VIOLATION") {
+        return deny("financial.guard_caps", "SPEND_LIMIT_EXCEEDED", check.reason ?? "spend cap exceeded");
+      }
       return null;
     },
   };
@@ -235,20 +289,18 @@ function createTurnTransferLimitRule(policy: TreasuryPolicy): PolicyRule {
 }
 
 /**
- * Deny inference calls if daily inference cost exceeds maxInferenceDailyCents.
- * Checks spend_tracking table for category 'inference'.
+ * Once the day's inference spend (read from the real meter, inference_costs) reaches
+ * maxInferenceDailyCents, deny every tool that is not read-only. Inference is not a tool
+ * call, so the rule has to apply to all tools.
  */
 function createInferenceDailyCapRule(policy: TreasuryPolicy): PolicyRule {
   return {
     id: "financial.inference_daily_cap",
-    description: `Deny inference if daily cost exceeds ${policy.maxInferenceDailyCents} cents`,
+    description: `Deny non-safe tools if daily inference cost exceeds ${policy.maxInferenceDailyCents} cents`,
     priority: 500,
-    appliesTo: { by: "category", categories: ["conway"] },
+    appliesTo: { by: "all" },
     evaluate(request: PolicyRequest): PolicyRuleResult | null {
-      // Only apply to inference-related tools
-      if (request.tool.name !== "chat" && request.tool.name !== "inference") {
-        return null;
-      }
+      if (request.tool.riskLevel === "safe") return null;
 
       const spendTracker = request.turnContext.sessionSpend;
       const dailyInferenceSpend = spendTracker.getDailySpend("inference");
@@ -307,6 +359,7 @@ export function createFinancialRules(
     createTransferHourlyCapRule(treasuryPolicy),
     createTransferDailyCapRule(treasuryPolicy),
     createMinimumReserveRule(treasuryPolicy),
+    createGuardCapsRule(treasuryPolicy),
     createTurnTransferLimitRule(treasuryPolicy),
     createInferenceDailyCapRule(treasuryPolicy),
     createRequireConfirmationRule(treasuryPolicy),

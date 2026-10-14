@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { SimpleAgentTracker, SimpleFundingProtocol } from "../../orchestration/simple-tracker.js";
 import { createInMemoryDb } from "./test-db.js";
 import type BetterSqlite3 from "better-sqlite3";
+import { SpendGuard, installSpendGuard } from "../../survival/spend-guard.js";
 
 function createMockAutomatonDb(db: BetterSqlite3.Database) {
   return {
@@ -203,9 +204,11 @@ describe("orchestration/SimpleFundingProtocol", () => {
     fundingDb.prepare(
       "INSERT INTO children (id, name, address, sandbox_id, genesis_prompt, funded_amount_cents, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     ).run("c1", "child-1", "0xchild", "sb-1", "test", 0, "running", new Date().toISOString());
+    installSpendGuard(new SpendGuard(fundingDb, undefined, async () => 100_000));
   });
 
   afterEach(() => {
+    installSpendGuard(null);
     fundingDb.close();
   });
 

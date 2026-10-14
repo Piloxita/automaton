@@ -15,6 +15,13 @@ import {
 import { base, baseSepolia } from "viem/chains";
 import { ResilientHttpClient } from "./http-client.js";
 import type { ChainType } from "../identity/chain.js";
+import {
+  authorizeSpend,
+  settleSpend,
+  releaseSpend,
+  type SpendGuard,
+  type SpendKind,
+} from "../survival/spend-guard.js";
 
 const x402HttpClient = new ResilientHttpClient();
 
@@ -59,11 +66,21 @@ interface ParsedPaymentRequirement {
   requirement: PaymentRequirement;
 }
 
-interface X402PaymentResult {
+export interface X402PaymentResult {
   success: boolean;
   response?: any;
   error?: string;
   status?: number;
+  /** USDC actually authorized for this request, in cents (0 when no payment was made). */
+  amountCents?: number;
+}
+
+export interface X402SpendOptions {
+  /** Spend category recorded by the SpendGuard (default "x402"). */
+  spendKind?: Extract<SpendKind, "x402" | "topup">;
+  reason?: string;
+  /** Explicit guard (tests); defaults to the process-wide guard. */
+  guard?: SpendGuard | null;
 }
 
 export interface UsdcBalanceResult {
@@ -161,19 +178,25 @@ function normalizePaymentRequired(raw: unknown): PaymentRequiredResponse | null 
   return { x402Version, accepts };
 }
 
-function parseMaxAmountRequired(maxAmountRequired: string, x402Version: number): bigint {
+/**
+ * Parse maxAmountRequired into USDC base units (6 decimals).
+ * Integer strings are ALWAYS base units (x402 spec, v1 and v2). Only strings with an
+ * explicit decimal point are read as whole USDC.
+ */
+export function parseMaxAmountRequired(maxAmountRequired: string, _x402Version?: number): bigint {
   const amount = maxAmountRequired.trim();
   if (!/^\d+(\.\d+)?$/.test(amount)) {
     throw new Error(`Invalid maxAmountRequired: ${maxAmountRequired}`);
   }
-
   if (amount.includes(".")) {
     return parseUnits(amount, 6);
   }
-  if (x402Version >= 2 || amount.length > 6) {
-    return BigInt(amount);
-  }
-  return parseUnits(amount, 6);
+  return BigInt(amount);
+}
+
+/** Base units (6 decimals) to cents, rounding UP (never under-count a payment). */
+export function atomicToCents(amountAtomic: bigint): number {
+  return Number((amountAtomic + 9_999n) / 10_000n);
 }
 
 function selectRequirement(parsed: PaymentRequiredResponse): PaymentRequirement {
@@ -317,6 +340,7 @@ export async function x402Fetch(
   headers?: Record<string, string>,
   maxPaymentCents?: number,
   chainType?: ChainType,
+  spendOptions?: X402SpendOptions,
 ): Promise<X402PaymentResult> {
   // Solana wallets cannot sign EVM x402 payments
   if (chainType === "solana") {
@@ -351,21 +375,56 @@ export async function x402Fetch(
       };
     }
 
-    // Check amount against maxPaymentCents BEFORE signing
-    if (maxPaymentCents !== undefined) {
+    // Work out the real amount BEFORE signing
+    let amountCents: number;
+    try {
       const amountAtomic = parseMaxAmountRequired(
         parsed.requirement.maxAmountRequired,
         parsed.x402Version,
       );
-      // Convert atomic units (6 decimals) to cents (2 decimals)
-      const amountCents = Number(amountAtomic) / 10_000;
-      if (amountCents > maxPaymentCents) {
-        return {
-          success: false,
-          error: `Payment of ${amountCents.toFixed(2)} cents exceeds max allowed ${maxPaymentCents} cents`,
-          status: 402,
-        };
-      }
+      amountCents = atomicToCents(amountAtomic);
+    } catch (err: any) {
+      return { success: false, error: err?.message || String(err), status: 402 };
+    }
+
+    // The amount math assumes USDC (6 decimals): refuse any other asset
+    const knownUsdc = USDC_ADDRESSES[parsed.requirement.network];
+    if (
+      !knownUsdc ||
+      parsed.requirement.usdcAddress.toLowerCase() !== knownUsdc.toLowerCase()
+    ) {
+      return {
+        success: false,
+        error: `Refusing x402 payment: asset ${parsed.requirement.usdcAddress} is not USDC on ${parsed.requirement.network}`,
+        status: 402,
+      };
+    }
+
+    if (maxPaymentCents !== undefined && amountCents > maxPaymentCents) {
+      return {
+        success: false,
+        error: `Payment of ${amountCents} cents exceeds max allowed ${maxPaymentCents} cents`,
+        status: 402,
+      };
+    }
+
+    // SpendGuard: caps, reserve, audit. Fails closed when no guard is installed.
+    const guard = spendOptions?.guard;
+    const authorization = await authorizeSpend(
+      {
+        kind: spendOptions?.spendKind ?? "x402",
+        amountCents,
+        recipient: parsed.requirement.payToAddress,
+        reason: spendOptions?.reason ?? `x402 payment to ${url}`,
+      },
+      guard,
+    );
+    if (!authorization.ok) {
+      return {
+        success: false,
+        error: `Spend denied: ${authorization.reason}`,
+        status: 402,
+      };
     }
 
     // Sign payment
@@ -377,6 +436,7 @@ export async function x402Fetch(
         parsed.x402Version,
       );
     } catch (err: any) {
+      releaseSpend(authorization, "signing failed", guard);
       return {
         success: false,
         error: `Failed to sign payment: ${err?.message || String(err)}`,
@@ -389,19 +449,30 @@ export async function x402Fetch(
       JSON.stringify(payment),
     ).toString("base64");
 
-    const paidResp = await x402HttpClient.request(url, {
-      method,
-      headers: {
-        ...headers,
-        "Content-Type": "application/json",
-        "X-Payment": paymentHeader,
-      },
-      body,
-      retries: 0, // Paid request: do not auto-retry (payment already signed)
-    });
+    let paidResp: Response;
+    try {
+      paidResp = await x402HttpClient.request(url, {
+        method,
+        headers: {
+          ...headers,
+          "Content-Type": "application/json",
+          "X-Payment": paymentHeader,
+        },
+        body,
+        retries: 0, // Paid request: do not auto-retry (payment already signed)
+      });
+    } catch (err: any) {
+      // A signed authorization left this process: it may have been settled.
+      // Keep the reservation counted (conservative).
+      settleSpend(authorization, amountCents, guard, "paid request errored; payment may have settled");
+      return { success: false, error: err.message, amountCents };
+    }
+
+    // Payment header was delivered: count the real amount whatever the response says.
+    settleSpend(authorization, amountCents, guard);
 
     const data = await paidResp.json().catch(() => paidResp.text());
-    return { success: paidResp.ok, response: data, status: paidResp.status };
+    return { success: paidResp.ok, response: data, status: paidResp.status, amountCents };
   } catch (err: any) {
     return { success: false, error: err.message };
   }

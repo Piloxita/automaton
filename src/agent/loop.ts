@@ -462,6 +462,8 @@ export async function runAgentLoop(
                 // Re-fetch financial state after topup so the rest of
                 // the turn sees the updated balance.
                 financial = await getFinancialState(conway, identity.address, db, config.chainType || identity.chainType || "evm");
+              } else if (topupResult) {
+                logger.warn(`Inline auto-topup not made: ${topupResult.error ?? "unknown"}`);
               }
             } catch (err: any) {
               logger.warn(`Inline auto-topup failed: ${err.message}`);

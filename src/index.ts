@@ -34,6 +34,8 @@ import { DEFAULT_TREASURY_POLICY } from "./types.js";
 import { createLogger, setGlobalLogLevel, StructuredLogger } from "./observability/logger.js";
 import { prettySink } from "./observability/pretty-sink.js";
 import { bootstrapTopup } from "./conway/topup.js";
+import { SpendGuard, installSpendGuard } from "./survival/spend-guard.js";
+import { createBalanceProvider } from "./survival/spend-balance.js";
 import { randomUUID } from "crypto";
 import { keccak256, toHex } from "viem";
 
@@ -330,6 +332,16 @@ async function run(): Promise<void> {
   const policyEngine = new PolicyEngine(db.raw, rules);
   const spendTracker = new SpendTracker(db.raw);
 
+  // SpendGuard: every money-moving path (x402, topup, transfers, child funding, gas)
+  // authorizes through this. Installed before anything can spend.
+  installSpendGuard(
+    new SpendGuard(
+      db.raw,
+      treasuryPolicy,
+      createBalanceProvider({ conway, address: identity.address, chainType: resolvedChainType }),
+    ),
+  );
+
   // Load and sync heartbeat config
   const heartbeatConfigPath = resolvePath(config.heartbeatConfigPath);
   const heartbeatConfig = loadHeartbeatConfig(heartbeatConfigPath);
@@ -373,6 +385,10 @@ async function run(): Promise<void> {
           if (topupResult?.success) {
             logger.info(
               `[${new Date().toISOString()}] Bootstrap topup: +$${topupResult.amountUsd} credits from USDC`,
+            );
+          } else if (topupResult) {
+            logger.warn(
+              `[${new Date().toISOString()}] Bootstrap topup not made: ${topupResult.error ?? "unknown"}`,
             );
           }
         })(),

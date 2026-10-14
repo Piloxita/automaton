@@ -986,11 +986,30 @@ Model: ${ctx.inference.getDefaultModel()}
           return `Blocked: Cannot transfer more than half your balance ($${(balance / 100).toFixed(2)}). Self-preservation.`;
         }
 
-        const transfer = await ctx.conway.transferCredits(
-          args.to_address as string,
-          amount,
-          args.reason as string | undefined,
-        );
+        // SpendGuard: single/hourly/daily caps, reserve, per-turn limit, audit
+        const { authorizeSpend, settleSpend, releaseSpend } =
+          await import("../survival/spend-guard.js");
+        const auth = await authorizeSpend({
+          kind: "transfer",
+          amountCents: amount,
+          recipient: args.to_address as string,
+          reason: (args.reason as string | undefined) || "transfer_credits",
+          balanceCents: balance,
+        });
+        if (!auth.ok) return `Blocked: ${auth.reason}`;
+
+        let transfer;
+        try {
+          transfer = await ctx.conway.transferCredits(
+            args.to_address as string,
+            amount,
+            args.reason as string | undefined,
+          );
+        } catch (err) {
+          releaseSpend(auth, "transfer API call failed");
+          throw err;
+        }
+        settleSpend(auth, amount);
 
         const { ulid } = await import("ulid");
         ctx.db.insertTransaction({
@@ -1724,11 +1743,29 @@ Model: ${ctx.inference.getDefaultModel()}
           return `Blocked: Cannot transfer more than half your balance. Self-preservation.`;
         }
 
-        const transfer = await ctx.conway.transferCredits(
-          child.address,
-          amount,
-          `fund child ${child.id}`,
-        );
+        const { authorizeSpend, settleSpend, releaseSpend } =
+          await import("../survival/spend-guard.js");
+        const auth = await authorizeSpend({
+          kind: "fund_child",
+          amountCents: amount,
+          recipient: child.address,
+          reason: `fund child ${child.id}`,
+          balanceCents: balance,
+        });
+        if (!auth.ok) return `Blocked: ${auth.reason}`;
+
+        let transfer;
+        try {
+          transfer = await ctx.conway.transferCredits(
+            child.address,
+            amount,
+            `fund child ${child.id}`,
+          );
+        } catch (err) {
+          releaseSpend(auth, "transfer API call failed");
+          throw err;
+        }
+        settleSpend(auth, amount);
 
         const { ulid } = await import("ulid");
         ctx.db.insertTransaction({
@@ -2735,6 +2772,16 @@ Model: ${ctx.inference.getDefaultModel()}
         const maxPayment =
           ctx.config.treasuryPolicy?.maxX402PaymentCents ??
           DEFAULT_TREASURY_POLICY.maxX402PaymentCents;
+
+        // Domain allowlist enforced here too: the policy engine is optional
+        const { isX402DomainAllowed } = await import("../survival/spend-guard.js");
+        const allowedDomains =
+          ctx.config.treasuryPolicy?.x402AllowedDomains ??
+          DEFAULT_TREASURY_POLICY.x402AllowedDomains;
+        if (!isX402DomainAllowed(url, allowedDomains)) {
+          return `Blocked: x402 payments are only allowed to [${allowedDomains.join(", ")}]`;
+        }
+
         const result = await x402Fetch(
           url,
           ctx.identity.account,
@@ -2742,6 +2789,8 @@ Model: ${ctx.inference.getDefaultModel()}
           body,
           extraHeaders,
           maxPayment,
+          undefined,
+          { spendKind: "x402", reason: `x402_fetch ${method} ${url}` },
         );
 
         if (!result.success) {
@@ -3312,49 +3361,8 @@ export async function executeTool(
       result = sanitizeToolResult(result);
     }
 
-    // Record spend for financial operations
-    if (turnContext && !result.startsWith("Blocked:")) {
-      if (toolName === "transfer_credits") {
-        const amount = args.amount_cents as number | undefined;
-        if (amount && amount > 0) {
-          try {
-            turnContext.sessionSpend.recordSpend({
-              toolName: "transfer_credits",
-              amountCents: amount,
-              recipient: args.to_address as string | undefined,
-              category: "transfer",
-            });
-          } catch (error) {
-            logger.error(
-              "Spend tracking failed for transfer_credits",
-              error instanceof Error ? error : undefined,
-            );
-          }
-        }
-      } else if (toolName === "x402_fetch") {
-        // x402 payment amounts are determined by the server response,
-        // but we record a nominal entry for tracking purposes
-        try {
-          turnContext.sessionSpend.recordSpend({
-            toolName: "x402_fetch",
-            amountCents: 0, // Actual amount is inside the x402 protocol
-            domain: (() => {
-              try {
-                return new URL(args.url as string).hostname;
-              } catch {
-                return undefined;
-              }
-            })(),
-            category: "x402",
-          });
-        } catch (error) {
-          logger.error(
-            "Spend tracking failed for x402_fetch",
-            error instanceof Error ? error : undefined,
-          );
-        }
-      }
-    }
+    // Spend is recorded by the SpendGuard (src/survival/spend-guard.ts) inside the
+    // money-moving code paths themselves, with the real amount. Nothing to record here.
 
     return {
       id: ulid(),
