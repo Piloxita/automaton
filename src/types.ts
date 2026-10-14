@@ -83,6 +83,13 @@ export interface AutomatonConfig {
    * on PATH, else "disabled" (resolved in sandbox/local-sandbox.ts).
    */
   localExecMode?: "bwrap" | "disabled" | "unsafe-host";
+  /**
+   * Network for the bwrap jail. "isolated": private namespace via pasta, internet
+   * works but host localhost services are unreachable. "none": no network.
+   * "host": share the host network (explicit opt-in only). Default when unset:
+   * "isolated" if pasta is on PATH, else "none".
+   */
+  localExecNetwork?: "isolated" | "none" | "host";
   /** Git URL of the upstream repo (set by the creator only). Unset = pull_upstream, reset_to_upstream and child spawning are disabled. */
   upstreamRepoUrl?: string;
   /** Branch or tag to track in upstreamRepoUrl. Default "main". */

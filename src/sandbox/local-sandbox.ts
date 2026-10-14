@@ -22,6 +22,15 @@ export type LocalExecMode = "bwrap" | "disabled" | "unsafe-host";
 export const LOCAL_EXEC_MODES: readonly LocalExecMode[] = ["bwrap", "disabled", "unsafe-host"];
 
 /** Where the workspace appears inside the jail (and the virtual home for file tools). */
+/**
+ * Network for the jail.
+ * "isolated": own network namespace via pasta (passt). Internet works, but the
+ *   host's loopback services (127.0.0.1 dashboards, local APIs) are unreachable.
+ * "none": no network at all.
+ * "host": share the host network, including its localhost (explicit opt-in only).
+ */
+export type JailNetwork = "isolated" | "none" | "host";
+
 export const VIRTUAL_WORKSPACE = "/workspace";
 /** write_file historically confines to /root; it is aliased to the workspace. */
 const VIRTUAL_HOME_ALIAS = "/root";
@@ -41,9 +50,17 @@ export class SandboxPathError extends Error {
 // ─── Mode resolution ─────────────────────────────────────────────
 
 export function findBwrap(envPath: string | undefined = process.env.PATH): string | null {
+  return findBinary("bwrap", envPath);
+}
+
+export function findPasta(envPath: string | undefined = process.env.PATH): string | null {
+  return findBinary("pasta", envPath);
+}
+
+function findBinary(name: string, envPath: string | undefined): string | null {
   for (const dir of (envPath || "").split(nodePath.delimiter)) {
     if (!dir) continue;
-    const candidate = nodePath.join(dir, "bwrap");
+    const candidate = nodePath.join(dir, name);
     try {
       fs.accessSync(candidate, fs.constants.X_OK);
       if (fs.statSync(candidate).isFile()) return candidate;
@@ -68,6 +85,22 @@ export function resolveLocalExecMode(
   if (configured === "bwrap") return bwrapPath ? "bwrap" : "disabled";
   if (configured === "disabled" || configured === "unsafe-host") return configured;
   return "disabled";
+}
+
+/**
+ * Resolve the jail network. Unset -> "isolated" if pasta is installed, else
+ * "none". Requesting "isolated" without pasta, or an unknown value, fails
+ * closed to "none". "host" is only used when explicitly set.
+ */
+export function resolveJailNetwork(
+  configured: unknown,
+  pastaPath: string | null = findPasta(),
+): JailNetwork {
+  if (configured === undefined || configured === null || configured === "" || configured === "isolated") {
+    return pastaPath ? "isolated" : "none";
+  }
+  if (configured === "none" || configured === "host") return configured;
+  return "none";
 }
 
 export const LOCAL_EXEC_DISABLED_MESSAGE =
@@ -142,10 +175,15 @@ function lstatOrNull(p: string): fs.Stats | null {
  * The jail sees: read-only system dirs, an empty /tmp, /proc, /dev, and the
  * workspace at /workspace (also aliased at /root). Nothing else from the host.
  */
-export function buildBwrapArgs(workspaceDir: string): string[] {
+export function buildBwrapArgs(
+  workspaceDir: string,
+  network: JailNetwork = "none",
+  jailResolvConf?: string,
+): string[] {
   const args: string[] = [
     "--unshare-all",
-    "--share-net",
+    // "isolated" shares pasta's private namespace, not the host's.
+    ...(network === "none" ? [] : ["--share-net"]),
     "--die-with-parent",
     "--new-session",
     "--cap-drop", "ALL",
@@ -166,10 +204,14 @@ export function buildBwrapArgs(workspaceDir: string): string[] {
     else if (st.isDirectory()) args.push("--ro-bind", link, link);
   }
 
-  // /etc/resolv.conf is commonly a symlink into /run; make DNS work without exposing /run.
+  // /etc/resolv.conf is commonly a symlink into /run (e.g. the systemd-resolved
+  // stub at 127.0.0.53), which is unreachable from a private namespace. In
+  // "isolated" mode, mount a resolv.conf with public resolvers at its real path.
   try {
     const resolvReal = fs.realpathSync("/etc/resolv.conf");
-    if (!resolvReal.startsWith("/etc/") && !resolvReal.startsWith("/usr/")) {
+    if (network === "isolated" && jailResolvConf) {
+      args.push("--ro-bind", jailResolvConf, resolvReal);
+    } else if (network === "host" && !resolvReal.startsWith("/etc/") && !resolvReal.startsWith("/usr/")) {
       const resolvDir = nodePath.dirname(resolvReal);
       if (resolvDir !== "/" && resolvDir.startsWith("/run/")) {
         args.push("--ro-bind-try", resolvDir, resolvDir);
@@ -190,14 +232,37 @@ export function buildBwrapArgs(workspaceDir: string): string[] {
   return args;
 }
 
+const JAIL_DNS = ["1.1.1.1", "8.8.8.8"];
+
+/** pasta options: own netns, no gateway mapping to host loopback, no port forwards. */
+export function buildPastaArgs(): string[] {
+  const args = ["--config-net", "--no-map-gw", "-T", "none", "-U", "none", "-t", "none", "-u", "none", "--quiet"];
+  for (const ns of JAIL_DNS) args.push("-D", ns);
+  return args;
+}
+
+export interface JailNetworkSetup {
+  network: JailNetwork;
+  pastaPath?: string | null;
+  /** Host file mounted as the jail's resolv.conf in "isolated" mode. */
+  jailResolvConf?: string;
+}
+
 export function execInBwrap(
   bwrapPath: string,
   workspaceDir: string,
   command: string,
   timeoutMs: number = DEFAULT_EXEC_TIMEOUT_MS,
+  net: JailNetworkSetup = { network: "none" },
 ): ExecResult {
-  const argv = [...buildBwrapArgs(workspaceDir), "--", "bash", "-c", command];
-  const r = spawnSync(bwrapPath, argv, {
+  if (net.network === "isolated" && !net.pastaPath) {
+    return { stdout: "", stderr: "Isolated network requested but pasta is not available. Command NOT executed.", exitCode: 126 };
+  }
+  const jailArgv = [...buildBwrapArgs(workspaceDir, net.network, net.jailResolvConf), "--", "bash", "-c", command];
+  const [bin, argv] = net.network === "isolated"
+    ? [net.pastaPath as string, [...buildPastaArgs(), "--", bwrapPath, ...jailArgv]]
+    : [bwrapPath, jailArgv];
+  const r = spawnSync(bin, argv, {
     timeout: timeoutMs,
     killSignal: "SIGKILL",
     encoding: "utf-8",
@@ -209,6 +274,10 @@ export function execInBwrap(
 
   const stdout = r.stdout || "";
   let stderr = r.stderr || "";
+  if (net.network === "isolated") {
+    // pasta warns about the host's loopback-only resolver; the jail uses its own.
+    stderr = stderr.replace(/^Couldn't get any nameserver address\n?/m, "");
+  }
   const code = (r.error as NodeJS.ErrnoException | undefined)?.code;
   if (code === "ETIMEDOUT") {
     return { stdout, stderr: `${stderr}\nCommand timed out after ${timeoutMs}ms`.trim(), exitCode: 124 };
@@ -224,8 +293,12 @@ export function execInBwrap(
 }
 
 /** True if bwrap can actually create the jail (user namespaces permitted, etc). */
-export function probeBwrap(bwrapPath: string, workspaceDir: string): { ok: boolean; detail: string } {
-  const r = execInBwrap(bwrapPath, workspaceDir, "true", 10_000);
+export function probeBwrap(
+  bwrapPath: string,
+  workspaceDir: string,
+  net: JailNetworkSetup = { network: "none" },
+): { ok: boolean; detail: string } {
+  const r = execInBwrap(bwrapPath, workspaceDir, "true", 10_000, net);
   return { ok: r.exitCode === 0, detail: r.stderr.trim() };
 }
 
@@ -347,6 +420,8 @@ export function readWorkspaceFile(filePath: string, workspaceDir: string): strin
 
 export interface LocalSandbox {
   readonly mode: LocalExecMode;
+  /** Jail network; absent in unsafe-host mode (the host network is used). */
+  readonly network?: JailNetwork;
   readonly workspaceDir: string;
   exec(command: string, timeoutMs?: number): ExecResult;
   writeFile(filePath: string, content: string): void;
@@ -359,6 +434,17 @@ export interface LocalSandboxOptions {
   workspaceDir?: string;
   /** Override bwrap lookup (tests). */
   bwrapPath?: string | null;
+  /** Jail network: "isolated" (default if pasta installed), "none", or "host". */
+  network?: unknown;
+  /** Override pasta lookup (tests). */
+  pastaPath?: string | null;
+}
+
+function writeJailResolvConf(workspaceDir: string): string {
+  // Lives next to the workspace (in ~/.automaton), never inside it, so the jail cannot edit it.
+  const file = nodePath.join(nodePath.dirname(workspaceDir), "jail-resolv.conf");
+  fs.writeFileSync(file, JAIL_DNS.map((ns) => `nameserver ${ns}`).join("\n") + "\n", { mode: 0o644 });
+  return file;
 }
 
 function expandHome(p: string): string {
@@ -400,16 +486,24 @@ export function createLocalSandbox(options: LocalSandboxOptions = {}): LocalSand
   }
 
   const workspaceDir = ensureWorkspaceDir(options.workspaceDir ?? getWorkspaceDir());
+  const pastaPath = options.pastaPath === undefined ? findPasta() : options.pastaPath;
+  const network = resolveJailNetwork(options.network, pastaPath);
+  const net: JailNetworkSetup = {
+    network,
+    pastaPath,
+    jailResolvConf: network === "isolated" ? writeJailResolvConf(workspaceDir) : undefined,
+  };
   let probe: { ok: boolean; detail: string } | null = null;
 
   return {
     mode,
+    network,
     workspaceDir,
     exec(command, timeoutMs) {
       if (mode === "disabled" || !bwrapPath) {
         return { stdout: "", stderr: LOCAL_EXEC_DISABLED_MESSAGE, exitCode: 126 };
       }
-      if (!probe) probe = probeBwrap(bwrapPath, workspaceDir);
+      if (!probe) probe = probeBwrap(bwrapPath, workspaceDir, net);
       if (!probe.ok) {
         probe = null; // re-probe next time; never run unisolated
         return {
@@ -420,7 +514,7 @@ export function createLocalSandbox(options: LocalSandboxOptions = {}): LocalSand
           exitCode: 126,
         };
       }
-      return execInBwrap(bwrapPath, workspaceDir, command, timeoutMs);
+      return execInBwrap(bwrapPath, workspaceDir, command, timeoutMs, net);
     },
     writeFile(filePath, content) {
       writeWorkspaceFile(filePath, content, workspaceDir);

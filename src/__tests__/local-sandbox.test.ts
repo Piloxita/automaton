@@ -13,6 +13,9 @@ import {
   enforceAutomatonPermissions,
   ensureWorkspaceDir,
   findBwrap,
+  findPasta,
+  execInBwrap,
+  resolveJailNetwork,
   getWorkspaceDir,
   LOCAL_EXEC_DISABLED_MESSAGE,
   probeBwrap,
@@ -74,7 +77,7 @@ describe("resolveLocalExecMode", () => {
 
 describe("buildBwrapArgs", () => {
   it("applies the isolation profile and mounts only the workspace from the home tree", () => {
-    const args = buildBwrapArgs(workspace);
+    const args = buildBwrapArgs(workspace, "isolated");
     for (const flag of ["--unshare-all", "--share-net", "--die-with-parent", "--new-session", "--clearenv"]) {
       expect(args).toContain(flag);
     }
@@ -322,5 +325,59 @@ describe("ConwayClient in local mode", () => {
     await client.writeFile("hello.txt", "from-host");
     const r = await client.exec("cat /root/hello.txt");
     expect(r.stdout).toBe("from-host");
+  });
+});
+
+describe("jail network", () => {
+  it("defaults to isolated with pasta, none without; host only when explicit", () => {
+    expect(resolveJailNetwork(undefined, "/usr/bin/pasta")).toBe("isolated");
+    expect(resolveJailNetwork(undefined, null)).toBe("none");
+    expect(resolveJailNetwork("isolated", null)).toBe("none");
+    expect(resolveJailNetwork("host", null)).toBe("host");
+    expect(resolveJailNetwork("lan", "/usr/bin/pasta")).toBe("none");
+  });
+
+  it("does not share any network namespace in none mode", () => {
+    expect(buildBwrapArgs(workspace, "none")).not.toContain("--share-net");
+    expect(buildBwrapArgs(workspace)).not.toContain("--share-net");
+  });
+
+  it("refuses to run isolated without pasta instead of falling back", () => {
+    const r = execInBwrap("/usr/bin/bwrap", workspace, "true", 5_000, { network: "isolated", pastaPath: null });
+    expect(r.exitCode).toBe(126);
+  });
+
+  const pastaPath = findPasta();
+  const jailNetWorks = (() => {
+    if (!bwrapWorks || !pastaPath) return false;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pasta-probe-"));
+    try {
+      return probeBwrap(bwrapPath!, fs.realpathSync(dir), { network: "isolated", pastaPath }).ok;
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  })();
+
+  it.skipIf(!bwrapWorks)("cannot reach a host localhost service in isolated or none mode", async () => {
+    const http = await import("http");
+    const server = http.createServer((_req, res) => res.end("HOST_SECRET_SERVICE"));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as { port: number }).port;
+    // bash /dev/tcp so the test does not depend on curl being installed.
+    const probe = `exec 3<>/dev/tcp/127.0.0.1/${port} && printf 'GET / HTTP/1.0\\r\\n\\r\\n' >&3 && cat <&3`;
+    try {
+      const modes = jailNetWorks ? (["none", "isolated"] as const) : (["none"] as const);
+      for (const network of modes) {
+        const r = await new Promise<ReturnType<typeof execInBwrap>>((resolve) =>
+          setImmediate(() => resolve(execInBwrap(bwrapPath!, workspace, probe, 10_000, {
+            network, pastaPath, jailResolvConf: undefined,
+          }))),
+        );
+        expect(r.stdout).not.toContain("HOST_SECRET_SERVICE");
+        expect(r.exitCode).not.toBe(0);
+      }
+    } finally {
+      server.close();
+    }
   });
 });

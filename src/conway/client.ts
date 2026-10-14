@@ -7,7 +7,7 @@
  */
 
 import { createLocalSandbox } from "../sandbox/local-sandbox.js";
-import type { LocalExecMode } from "../sandbox/local-sandbox.js";
+import type { JailNetwork, LocalExecMode } from "../sandbox/local-sandbox.js";
 import type {
   ConwayClient,
   ExecResult,
@@ -34,6 +34,7 @@ interface ConwayClientOptions {
   sandboxId: string;
   /** Local execution mode when sandboxId is empty. Unset = bwrap if installed, else disabled. */
   localExecMode?: LocalExecMode;
+  localExecNetwork?: JailNetwork;
   /** Host dir bound at /workspace in local mode (default ~/.automaton/workspace). */
   localWorkspaceDir?: string;
 }
@@ -114,6 +115,7 @@ export function createConwayClient(options: ConwayClientOptions): ConwayClient {
   const localSandbox = isLocal
     ? createLocalSandbox({
         mode: options.localExecMode,
+        network: options.localExecNetwork,
         workspaceDir: options.localWorkspaceDir,
       })
     : null;

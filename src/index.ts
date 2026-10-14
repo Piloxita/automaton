@@ -242,7 +242,7 @@ async function run(): Promise<void> {
 
   // Local execution mode (only relevant when no remote sandbox is configured)
   if (!config.sandboxId) {
-    const { resolveLocalExecMode, LOCAL_EXEC_DISABLED_MESSAGE } = await import("./sandbox/local-sandbox.js");
+    const { resolveLocalExecMode, resolveJailNetwork, LOCAL_EXEC_DISABLED_MESSAGE } = await import("./sandbox/local-sandbox.js");
     const localMode = resolveLocalExecMode(config.localExecMode);
     if (localMode === "unsafe-host") {
       logger.warn(
@@ -252,7 +252,13 @@ async function run(): Promise<void> {
     } else if (localMode === "disabled") {
       logger.warn(LOCAL_EXEC_DISABLED_MESSAGE);
     } else {
-      logger.info("Local command execution isolated with bubblewrap (workspace: ~/.automaton/workspace)");
+      const network = resolveJailNetwork(config.localExecNetwork);
+      logger.info(`Local command execution isolated with bubblewrap (workspace: ~/.automaton/workspace, network: ${network})`);
+      if (network === "host") {
+        logger.warn("!!! localExecNetwork=host: jailed commands can reach services on this host's localhost.");
+      } else if (network === "none") {
+        logger.warn("Jail has no network (install passt for isolated networking). The agent cannot reach the internet from shell commands.");
+      }
     }
   }
 
@@ -262,6 +268,7 @@ async function run(): Promise<void> {
     apiKey,
     sandboxId: config.sandboxId,
     localExecMode: config.localExecMode,
+    localExecNetwork: config.localExecNetwork,
   });
 
   // Register automaton identity (one-time, immutable)
