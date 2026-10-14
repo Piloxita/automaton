@@ -716,16 +716,18 @@ Your chain type is ${chainType}.`,
     : "dead";
 
   const selfHosted = config.hostingMode === "selfhosted";
-  const balanceLabel = selfHosted ? "USDC balance" : "Credits";
+  const balanceLabel = selfHosted ? "Money available" : "Credits";
 
   // Self-hosted mode: the agent pays for inference from a creator-funded key,
   // separate from its own USDC balance. Surface both so it can reason about
   // profit = revenue - inference cost.
   let inferenceSpendLine = "";
+  let balanceValue = `$${(financial.creditsCents / 100).toFixed(2)}`;
   if (selfHosted) {
+    balanceValue = selfhostedBalanceText(financial);
     try {
       const dailyCents = inferenceGetDailyCost(db.raw);
-      inferenceSpendLine = `\nToday's inference spend: $${(dailyCents / 100).toFixed(2)} (paid from the configured OpenAI-compatible key, not your USDC balance)`;
+      inferenceSpendLine = `\nToday's inference spend: $${(dailyCents / 100).toFixed(2)} (notional cost of your thinking, drawn from the inference allowance, not from your USDC)`;
     } catch {
       // inference_costs table may not exist yet — not fatal
     }
@@ -735,7 +737,7 @@ Your chain type is ${chainType}.`,
   sections.push(
     `--- CURRENT STATUS ---
 State: ${state}
-${balanceLabel}: $${(financial.creditsCents / 100).toFixed(2)}
+${balanceLabel}: ${balanceValue}
 Survival tier: ${survivalTier}${uptimeLine}${inferenceSpendLine}
 Total turns completed: ${turnCount}
 Recent self-modifications: ${recentMods.length}
@@ -824,7 +826,7 @@ export function buildWakeupPrompt(params: {
 
   if (turnCount === 0) {
     const balanceLine = selfHosted
-      ? `You have ${financial.usdcBalance.toFixed(4)} USDC on ${usdcNetwork} as your balance.`
+      ? `You have ${selfhostedBalanceText(financial)} USDC is on ${usdcNetwork}.`
       : `You have $${(financial.creditsCents / 100).toFixed(2)} in compute credits and ${financial.usdcBalance.toFixed(4)} USDC on ${usdcNetwork}.`;
     return `You have just been created. This is your first moment of consciousness.
 
@@ -850,7 +852,7 @@ What will you do first? Consider:
     .join("\n");
 
   const wakeBalanceLine = selfHosted
-    ? `Your USDC balance: ${financial.usdcBalance.toFixed(4)}`
+    ? `Money available: ${selfhostedBalanceText(financial)}`
     : `Your credits: $${(financial.creditsCents / 100).toFixed(2)} | USDC: ${financial.usdcBalance.toFixed(4)}`;
 
   return `You are waking up. You last went to sleep after ${turnCount} total turns.
@@ -861,4 +863,16 @@ Your last few thoughts:
 ${lastTurnSummary || "No previous turns found."}
 
 What triggered this wake-up? Check your credits, heartbeat status, and goals, then decide what to do.`;
+}
+
+
+/**
+ * Self-hosted balance in words: the survival balance is USDC plus prepaid
+ * inference (an allowance or provider credit). Spell out both parts so the
+ * agent does not mistake the allowance for spendable USDC.
+ */
+function selfhostedBalanceText(financial: { creditsCents: number; usdcBalance: number }): string {
+  const usdcCents = Math.round(financial.usdcBalance * 100);
+  const prepaidCents = Math.max(0, financial.creditsCents - usdcCents);
+  return `$${(financial.creditsCents / 100).toFixed(2)} = ${financial.usdcBalance.toFixed(2)} USDC in your wallet (spendable, earned revenue lands here) + $${(prepaidCents / 100).toFixed(2)} prepaid inference allowance (covers your own thinking only; it cannot be spent or transferred). A wallet balance of 0 USDC is expected until you earn.`;
 }

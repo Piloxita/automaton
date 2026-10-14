@@ -158,7 +158,18 @@ function createCheckBalanceTool(): AutomatonTool {
         // inference_costs table may not exist yet — not fatal
       }
 
-      return `USDC balance: ${balance.toFixed(6)} USDC (~$${balance.toFixed(2)})${spendLine}`;
+      let prepaidLine = "";
+      try {
+        const { readInferenceCreditCents } = await import("../survival/selfhosted-balance.js");
+        const prepaid = await readInferenceCreditCents();
+        if (prepaid > 0) {
+          prepaidLine = `\nPrepaid inference allowance: $${(prepaid / 100).toFixed(2)} (covers your thinking only; not spendable USDC)`;
+        }
+      } catch {
+        // not fatal
+      }
+
+      return `USDC wallet balance: ${balance.toFixed(6)} USDC (~$${balance.toFixed(2)}; 0 is expected until you earn)${prepaidLine}${spendLine}`;
     },
   };
 }
@@ -973,7 +984,8 @@ Model: ${ctx.inference.getDefaultModel()}
       execute: async (args, ctx) => {
         ctx.db.setAgentState("low_compute");
         ctx.inference.setLowComputeMode(true);
-        return `Entered low-compute mode. Model switched to gpt-5-mini. Reason: ${(args.reason as string) || "manual"}`;
+        const lowModel = ctx.config.modelStrategy?.lowComputeModel || "gpt-5-mini";
+        return `Entered low-compute mode. Model switched to ${lowModel}. Reason: ${(args.reason as string) || "manual"}`;
       },
     },
 

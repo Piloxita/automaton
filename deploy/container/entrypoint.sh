@@ -6,6 +6,8 @@
 # the last build that stayed up for 10 minutes.
 set -u
 cd /app
+pid=""
+trap 'echo "[supervisor] stopping"; [ -n "$pid" ] && kill -TERM "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; exit 0' TERM INT
 fast_crashes=0
 while true; do
   start=$(date +%s)
