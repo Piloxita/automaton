@@ -16,7 +16,7 @@ Env:
   RELAY_SOCKET              default $XDG_RUNTIME_DIR/automaton-relay/relay.sock
   CLAUDE_CONFIG_DIR         dedicated config dir for the agent's account
   CLAUDE_CODE_OAUTH_TOKEN   alternative: long-lived token from `claude setup-token`
-  RELAY_MAX_CALLS_PER_HOUR  default 60
+  RELAY_MAX_CALLS_PER_HOUR  default 60 (the unit sets 120)
   RELAY_TIMEOUT_SECS        default 300
 """
 import json

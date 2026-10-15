@@ -6,7 +6,7 @@ Description=Automaton Claude relay (subscription inference over a unix socket)
 # hooks, MCP servers or memory from the creator's main account.
 Environment=PATH=%h/.local/share/mise/shims:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=CLAUDE_CONFIG_DIR=%h/.config/automaton-creator/claude
-Environment=RELAY_MAX_CALLS_PER_HOUR=60
+Environment=RELAY_MAX_CALLS_PER_HOUR=120
 # Optional: CLAUDE_CODE_OAUTH_TOKEN=... from `claude setup-token` (chmod 600).
 EnvironmentFile=-%h/.config/automaton-creator/claude-relay.env
 ExecStart=/usr/bin/python3 %h/Projects/automaton/deploy/relay/claude-relay.py
