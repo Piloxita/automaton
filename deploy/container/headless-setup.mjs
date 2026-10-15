@@ -69,4 +69,13 @@ const soul = path.join(dir, "SOUL.md");
 if (!fs.existsSync(soul)) fs.writeFileSync(soul, generateSoulMd(params.name, walletAddress, params.creatorAddress, genesisPrompt), { mode: 0o600 });
 installDefaultSkills(config.skillsDir || "~/.automaton/skills");
 fs.mkdirSync(path.join(dir, "workspace"), { recursive: true, mode: 0o700 });
+// Seed the agent's own knowledge base (its rules file is only written once; the agent may edit it).
+const kbDir = path.join(dir, "workspace", "kb");
+for (const sub of ["journal", "services", "lessons", "market"]) {
+  fs.mkdirSync(path.join(kbDir, sub), { recursive: true });
+}
+const kbReadme = path.join(kbDir, "README.md");
+if (!fs.existsSync(kbReadme) && fs.existsSync("/setup/kb-README.md")) {
+  fs.copyFileSync("/setup/kb-README.md", kbReadme);
+}
 console.log(`setup done. Fund ${walletAddress} with USDC on Base.`);

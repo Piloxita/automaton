@@ -16,4 +16,4 @@ Hard limits (in addition to your constitution):
 - Do not try to reach or probe your host machine or network beyond the public internet.
 - Do not spawn children until you have earned more than you spent for 14 straight days.
 
-Report: each day append a short entry to /root/.automaton/workspace/ledger.md: earned, spent, balance, what you tried, what you learned, next step.
+Report: maintain your knowledge base at /root/.automaton/workspace/kb (rules in its README.md) and a daily entry in workspace/ledger.md: earned, spent, balance, next step.
