@@ -1,8 +1,8 @@
 [Unit]
-Description=Automaton daily advisor at 15:00
+Description=Automaton advisor every 6 hours
 
 [Timer]
-OnCalendar=*-*-* 15:00
+OnCalendar=*-*-* 03,09,15,21:30
 Persistent=true
 
 [Install]

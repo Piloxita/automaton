@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Daily advisor: an Opus pass over the agent's last 24 hours that coaches it.
+"""Advisor: an Opus pass every 6 hours over the agent's recent activity that coaches it.
 
 The advisor (headless Claude) may only Read: the agent's workspace, the creator's kb and the
 strategy notes; no shell, no edits. It answers with JSON; this script then
@@ -32,7 +32,7 @@ DENY = re.compile(r"referral|candidate|person-a|employer|laptop|tail\d{4,}|org-b
                   r"sk-ant-|sk-or-|-----BEGIN|0x[0-9a-fA-F]{64}|/\.config/|password|\btoken\b", re.I)
 
 
-def activity(hours: int = 24) -> str:
+def activity(hours: int = 7) -> str:
     since = datetime.fromtimestamp(time.time() - hours * 3600, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
     con = sqlite3.connect(f"file:{VOL / 'state.db'}?mode=ro", uri=True, timeout=5)
     out = []
@@ -46,14 +46,25 @@ def activity(hours: int = 24) -> str:
     return "\n".join(out) or "(no turns in the window)"
 
 
+def previous_advice() -> str:
+    try:
+        last = json.loads(LOG.read_text().splitlines()[-1])
+    except (OSError, ValueError, IndexError):
+        return "(none)"
+    return f"{last.get('ts')}: assessment: {last.get('assessment')} | note sent: {last.get('note_for_agent') or '(none)'}"
+
+
 def ask_advisor(act_path: Path, digest: str) -> dict:
     ws = str(WS)
-    prompt = f"""You are the daily advisor of an autonomous agent (the automaton) whose job is to earn money with
+    prompt = f"""You are the advisor of an autonomous agent (the automaton) whose job is to earn money with
 paid services. You coach it on behalf of its creator. You have more context than it does: the creator's
 notes and tool verdicts in ~/kb (topics/, trials/, sources/), the project page ~/kb/topics/automaton.md and
 the strategy notes ~/.config/automaton-creator/knowledge/strategy.md.
 
-Read: {act_path} (its last 24 hours: thinking and tool calls), its kb under {ws}/kb (journal, services,
+You run every 6 hours. Your previous run: {previous_advice()}
+Do not repeat advice it already received unless it ignored it; if it is on track, send no note.
+
+Read: {act_path} (its last 7 hours: thinking and tool calls), its kb under {ws}/kb (journal, services,
 lessons, market, needs-creator.md), {ws}/ledger.md, and this digest:
 
 {digest}
