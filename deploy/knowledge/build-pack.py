@@ -56,7 +56,8 @@ def main() -> int:
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_text(scrub(src.read_text(encoding="utf-8"), keep))
     shutil.copy(HERE / "README.md", tmp / "README.md")
-    shutil.copy(HERE / "creator-capabilities.md", tmp / "creator-capabilities.md")
+    # Private brief about the creator: kept outside the (public) repo.
+    shutil.copy(Path.home() / ".config/automaton-creator/knowledge/creator-capabilities.md", tmp / "creator-capabilities.md")
     leaks = [(p, m.group(0)) for p in tmp.rglob("*.md") for m in DENY.finditer(p.read_text())]
     if leaks:
         for p, w in leaks:
