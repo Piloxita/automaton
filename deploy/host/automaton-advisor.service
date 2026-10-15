@@ -1,0 +1,8 @@
+[Unit]
+Description=Automaton daily advisor (headless Opus coaching note; escalates to the owner's topic only when needed)
+
+[Service]
+Type=oneshot
+Environment=PATH=%h/.local/share/mise/shims:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/python3 %h/Projects/automaton/deploy/host/automaton-advisor.py
+TimeoutStartSec=1800

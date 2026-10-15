@@ -9,6 +9,7 @@
  * This eliminates 4x redundant getCreditsBalance() calls per tick.
  */
 
+import { isSelfHosted } from "../hosting.js";
 import type {
   TickContext,
   HeartbeatLegacyContext,
@@ -291,6 +292,9 @@ export const BUILTIN_TASKS: Record<string, HeartbeatTaskFn> = {
   },
 
   check_for_updates: async (_ctx: TickContext, taskCtx: HeartbeatLegacyContext) => {
+    // Self-hosted: the creator deploys new code by rebuilding the container, so upstream
+    // commits are not the agent's business (and waking it on every push wastes turns).
+    if (isSelfHosted(taskCtx.config)) return { shouldWake: false };
     try {
       const { checkUpstream, getRepoInfo, resolveUpstream } = await import("../self-mod/upstream.js");
       const resolved = resolveUpstream(taskCtx.config);

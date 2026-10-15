@@ -1,0 +1,9 @@
+[Unit]
+Description=Automaton daily advisor at 15:00
+
+[Timer]
+OnCalendar=*-*-* 15:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
