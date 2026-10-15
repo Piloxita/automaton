@@ -64,6 +64,7 @@ import { HarnessRegistry } from "./harness-registry.js";
 import { createWorkerInferenceBridge } from "./worker-inference-bridge.js";
 import { ProviderRegistry } from "../inference/provider-registry.js";
 import { UnifiedInferenceClient } from "../inference/inference-client.js";
+import { SelfhostedUnifiedClient } from "../inference/selfhosted-unified-client.js";
 import { isIdleOnlyTool } from "./idle-only-tools.js";
 import { isSelfHosted } from "../hosting.js";
 import { configureSelfhostedModels } from "../inference/registry.js";
@@ -190,7 +191,13 @@ export async function runAgentLoop(
         registry.overrideBaseUrl("openai", process.env.OPENAI_BASE_URL);
       }
 
-      const unifiedInference = new UnifiedInferenceClient(registry);
+      const unifiedInference: UnifiedInferenceClient = isSelfHosted(config)
+        ? (new SelfhostedUnifiedClient(inference, {
+            reasoning: modelStrategyConfig.inferenceModel,
+            fast: modelStrategyConfig.inferenceModel,
+            cheap: modelStrategyConfig.lowComputeModel,
+          }) as unknown as UnifiedInferenceClient)
+        : new UnifiedInferenceClient(registry);
       const agentTracker = new SimpleAgentTracker(db);
       const funding = new SimpleFundingProtocol(conway, identity, db);
       const messaging = new ColonyMessaging(
