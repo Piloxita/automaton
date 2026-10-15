@@ -11,3 +11,4 @@ dist
 .automaton/wallet.json
 .automaton/state.db
 
+__pycache__/
