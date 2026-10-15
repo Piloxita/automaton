@@ -187,6 +187,12 @@ class Handler(BaseHTTPRequestHandler):
             t0 = time.time()
             try:
                 p = run_claude(system, prompt, model)
+                if model == "opus" and p.returncode != 0 and "safeguards flagged" in (p.stdout + p.stderr):
+                    # Opus refused under its usage policy; the CLI itself says to switch models.
+                    # Do not rephrase around the refusal: answer with Sonnet instead.
+                    log({"status": "fallback", "model": "opus", "to": "sonnet"})
+                    model = "sonnet"
+                    p = run_claude(system, prompt, model)
             except subprocess.TimeoutExpired:
                 log({"status": "timeout", "model": model})
                 return self.error(504, "claude timed out")
