@@ -210,6 +210,16 @@ describe("Financial Policy Rules", () => {
       expect(decision.action).toBe("allow");
     });
 
+    it("\"*\" allows any domain", () => {
+      const wild = new PolicyEngine(db, createFinancialRules({ ...DEFAULT_TREASURY_POLICY, x402AllowedDomains: ["*"] }));
+      const request = createRequest(
+        mockX402Tool(),
+        { url: "https://data.example.com/api" },
+        createMockSpendTracker(),
+      );
+      expect(wild.evaluate(request).action).toBe("allow");
+    });
+
     it("denies invalid URLs", () => {
       const request = createRequest(
         mockX402Tool(),

@@ -524,7 +524,8 @@ export function isX402DomainAllowed(url: string, allowedDomains: string[]): bool
   } catch {
     return false;
   }
-  return allowedDomains.some((d) => hostname === d || hostname.endsWith(`.${d}`));
+  // "*" lets the agent pay any x402 endpoint directly (amount caps still apply).
+  return allowedDomains.some((d) => d === "*" || hostname === d || hostname.endsWith(`.${d}`));
 }
 
 /**

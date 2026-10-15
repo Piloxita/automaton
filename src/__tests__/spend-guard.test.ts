@@ -314,6 +314,8 @@ describe("SpendGuard core", () => {
     expect(isX402DomainAllowed("https://evilconway.tech/x", ["conway.tech"])).toBe(false);
     expect(isX402DomainAllowed("https://conway.tech/x", [])).toBe(false);
     expect(isX402DomainAllowed("not a url", ["conway.tech"])).toBe(false);
+    expect(isX402DomainAllowed("https://any.example.com/x", ["*"])).toBe(true);
+    expect(isX402DomainAllowed("not a url", ["*"])).toBe(false);
   });
 });
 

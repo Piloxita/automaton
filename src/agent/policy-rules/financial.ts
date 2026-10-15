@@ -112,7 +112,7 @@ function createX402DomainAllowlistRule(policy: TreasuryPolicy): PolicyRule {
 
       const isAllowed = allowedDomains.some(
         (domain) =>
-          hostname === domain || hostname.endsWith(`.${domain}`),
+          domain === "*" || hostname === domain || hostname.endsWith(`.${domain}`),
       );
 
       if (!isAllowed) {
