@@ -4,9 +4,11 @@
 Deterministic (no LLM): reads the agent's state.db, workspace (kb, ledger,
 services-status.json), the host helper's status file and the relay log, then
 posts plain text through the master bot's topic-post spool (pmb.botchat).
-Runs from the master bot's venv (so `pmb` imports), daily at 21:00.
+Runs from the master bot's venv (so `pmb` imports), daily at 21:00, plus a
+shorter-window morning standup at 10:00 (`--standup`: covers the night since
+the evening digest and leaves the evening wallet baseline alone).
 
-  automaton-digest.py [--dry-run]
+  automaton-digest.py [--standup] [--dry-run]
 """
 import json
 import re
@@ -39,9 +41,10 @@ def money(c):
     return f"${c / 100:,.2f}"
 
 
-def main(dry: bool) -> int:
+def main(dry: bool, standup: bool = False) -> int:
     now = time.time()
-    since = now - 86400
+    since = now - (13 if standup else 24) * 3600
+    win = "overnight" if standup else "in 24 h"
     since_iso = datetime.fromtimestamp(since, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
     lines, needs = [], []
     prev = {}
@@ -75,14 +78,14 @@ def main(dry: bool) -> int:
                             (since_iso.replace("T", " "),)).fetchone()[0]
         revenue = con.execute("SELECT COALESCE(SUM(actual_revenue_cents),0) FROM goals").fetchone()[0]
         con.close()
-        lines.append(f"State: {state} · {turns} turns in 24 h · last turn {str(last)[:16].replace('T', ' ')} UTC")
+        lines.append(f"State: {state} · {turns} turns {win} · last turn {str(last)[:16].replace('T', ' ')} UTC")
         if turns == 0:
-            needs.append("No agent turns in the last 24 hours.")
+            needs.append("No agent turns " + ("overnight." if standup else "in the last 24 hours."))
         delta = ""
         if "usdc" in prev:
             d = usdc - float(prev["usdc"])
-            delta = f" ({'+' if d >= 0 else ''}{d:.2f} since yesterday)"
-        lines.append(f"Wallet: {usdc:.2f} USDC{delta} · recorded revenue {money(revenue)} · thinking {money(spend)} (24 h, notional)")
+            delta = f" ({'+' if d >= 0 else ''}{d:.2f} {'since last night' if standup else 'since yesterday'})"
+        lines.append(f"Wallet: {usdc:.2f} USDC{delta} · recorded revenue {money(revenue)} · thinking {money(spend)} ({'overnight' if standup else '24 h'}, notional)")
     except (OSError, sqlite3.Error, ValueError) as e:
         needs.append(f"Could not read the agent database: {e}")
 
@@ -102,9 +105,9 @@ def main(dry: bool) -> int:
             errors += e.get("status") in ("error", "timeout")
     except OSError:
         pass
-    lines.append(f"Relay: {calls} calls in 24 h" + (f" · {limited} limit hits" if limited else "") + (f" · {errors} errors" if errors else ""))
+    lines.append(f"Relay: {calls} calls {win}" + (f" · {limited} limit hits" if limited else "") + (f" · {errors} errors" if errors else ""))
     if limited:
-        needs.append(f"The second Claude account hit its usage limit {limited}x today.")
+        needs.append(f"The second Claude account hit its usage limit {limited}x " + ("overnight." if standup else "today."))
 
     # services
     try:
@@ -148,7 +151,8 @@ def main(dry: bool) -> int:
     if ask.is_file() and ask.read_text(errors="replace").strip():
         needs.append("The agent asks: " + ask.read_text(errors="replace").strip()[:600])
 
-    head = f"🤖 Automaton daily · {datetime.now().strftime('%a %d %b')}"
+    title = "☀️ Automaton standup" if standup else "🤖 Automaton daily"
+    head = f"{title} · {datetime.now().strftime('%a %d %b')}"
     tail = ["", "⚠️ Needs you:"] + [f"  · {n}" for n in needs] if needs else ["", "✅ No action needed."]
     text = "\n".join([head, ""] + lines + tail + ["", "Hub: http://laptop/#/automaton"])
 
@@ -158,7 +162,7 @@ def main(dry: bool) -> int:
     sys.path.insert(0, str(HOME / "Projects/piloxita-master-bot"))
     from pmb import botchat
     botchat.post("master", "automaton", text)
-    if usdc is not None:
+    if usdc is not None and not standup:
         STATE.parent.mkdir(parents=True, exist_ok=True)
         STATE.write_text(json.dumps({"usdc": usdc, "ts": now}))
     print("posted")
@@ -166,4 +170,4 @@ def main(dry: bool) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main("--dry-run" in sys.argv))
+    sys.exit(main("--dry-run" in sys.argv, "--standup" in sys.argv))

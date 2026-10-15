@@ -1,0 +1,6 @@
+[Unit]
+Description=Automaton morning standup to the owner's Telegram Automaton topic
+
+[Service]
+Type=oneshot
+ExecStart=%h/Projects/piloxita-master-bot/.venv/bin/python %h/Projects/automaton/deploy/host/automaton-digest.py --standup
