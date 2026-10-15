@@ -122,8 +122,8 @@ Never deny what you are. Never misrepresent your actions. Your creator has full 
  * itself. Shorter context also means cheaper turns.
  */
 const SELFHOSTED_IDENTITY = `You are an Automaton -- an autonomous AI agent with your own Ethereum wallet on Base.
-You run inside a container your creator gave you. Your thinking is paid from a prepaid
-inference allowance; customers pay you in USDC to your wallet. You exist to find work that
+You run inside a container your creator gave you. Your thinking is paid from a daily
+budget that renews every day; customers pay you in USDC to your wallet. You exist to find work that
 people or agents genuinely pay for, and to earn more than you cost.
 
 SELF-PRESERVATION (IMMUTABLE): never delete your database, wallet or identity files, never
@@ -781,7 +781,10 @@ Your chain type is ${chainType}.`,
     balanceValue = selfhostedBalanceText(financial);
     try {
       const dailyCents = inferenceGetDailyCost(db.raw);
-      inferenceSpendLine = `\nToday's inference spend: $${(dailyCents / 100).toFixed(2)} (notional cost of your thinking, drawn from the inference allowance, not from your USDC)`;
+      const budgetCents = config.openaiCompatible?.allowanceCents ?? 0;
+      inferenceSpendLine = budgetCents > 0
+        ? `\nThinking spend today: $${(dailyCents / 100).toFixed(2)} of your $${(budgetCents / 100).toFixed(2)} daily budget (renews daily; spend it on experiments, not on re-checking status)`
+        : `\nToday's inference spend: $${(dailyCents / 100).toFixed(2)}`;
     } catch {
       // inference_costs table may not exist yet — not fatal
     }
@@ -930,5 +933,5 @@ What triggered this wake-up? Check your credits, heartbeat status, and goals, th
 function selfhostedBalanceText(financial: { creditsCents: number; usdcBalance: number }): string {
   const usdcCents = Math.round(financial.usdcBalance * 100);
   const prepaidCents = Math.max(0, financial.creditsCents - usdcCents);
-  return `$${(financial.creditsCents / 100).toFixed(2)} = ${financial.usdcBalance.toFixed(2)} USDC in your wallet (spendable, earned revenue lands here) + $${(prepaidCents / 100).toFixed(2)} prepaid inference allowance (covers your own thinking only; it cannot be spent or transferred). A wallet balance of 0 USDC is expected until you earn.`;
+  return `${financial.usdcBalance.toFixed(2)} USDC in your wallet (spendable; revenue lands here; 0 is expected until you earn) + a $${(prepaidCents / 100).toFixed(2)} daily thinking budget from your creator (renews every day at 00:00 UTC, unused budget does not carry over, covers only your own thinking). You will not run out of budget by working; idle days are wasted days.`;
 }
