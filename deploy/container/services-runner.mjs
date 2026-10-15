@@ -5,6 +5,8 @@
 // Each service is restarted when it exits (with backoff) and after container
 // restarts; "public" ones get a Cloudflare quick tunnel, also kept alive.
 // State for the agent and the creator's dashboard: workspace/services-status.json.
+// Restart one service without touching its tunnel (the public URL stays):
+//   touch /root/.automaton/workspace/services-restart/<name>
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -12,6 +14,7 @@ import path from "node:path";
 const WS = "/root/.automaton/workspace";
 const CONFIG = path.join(WS, "services.json");
 const STATUS = path.join(WS, "services-status.json");
+const RESTART_DIR = path.join(WS, "services-restart");
 const LOGS = path.join(WS, "logs");
 const MAX_SERVICES = 5;
 const MAX_LOG = 5 * 1024 * 1024;
@@ -70,7 +73,7 @@ function startProc(st) {
     st.lastExit = { code, signal, at: new Date().toISOString() };
     if (st.stopped) return;
     const ranMs = Date.now() - st.startedAt;
-    st.backoff = ranMs > 60_000 ? 2_000 : Math.min((st.backoff || 2_000) * 2, 300_000);
+    st.backoff = st.backoff === 0 || ranMs > 60_000 ? 2_000 : Math.min((st.backoff || 2_000) * 2, 300_000);
     st.restarts += 1;
     setTimeout(() => !st.stopped && startProc(st), st.backoff);
   });
@@ -157,8 +160,27 @@ function reconcile() {
   }
 }
 
+function restartRequested() {
+  let names;
+  try {
+    names = fs.readdirSync(RESTART_DIR);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    try { fs.unlinkSync(path.join(RESTART_DIR, name)); } catch {}
+    const st = running.get(name);
+    if (!st || st.stopped) continue;
+    log(`restart requested: ${name}`);
+    st.backoff = 0;
+    if (st.proc) kill(st.proc);
+    else startProc(st);
+  }
+}
+
 async function tick() {
   reconcile();
+  restartRequested();
   for (const st of running.values()) st.healthy = await health(st);
   writeStatus();
 }

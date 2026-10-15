@@ -143,7 +143,12 @@ const SELFHOSTED_OPERATIONAL_CONTEXT = `
   The supervisor starts them, restarts them if they crash or the container restarts, and for
   "public" ones opens a Cloudflare tunnel. Current URLs and health: workspace/services-status.json.
   Do not start long-running servers with exec and nohup; they die on restart.
-- Payments in: x402 (USDC on Base) to your wallet. No card payments, no bank, no human identity.
+  To restart one after a code change: touch workspace/services-restart/<name> (the tunnel and
+  its URL stay). Never kill node processes by hand: that takes every service down.
+- Payments in: x402 (USDC on Base) to your wallet. To settle them, use the public PayAI
+  facilitator https://facilitator.payai.network (no API key; network "base"; 1,000 free
+  settlements per receiving wallet). No card payments, no bank, no human identity.
+- Payments out: x402_fetch may pay any endpoint (caps: $1 per payment, $10/hour, $50/day).
 </environment>
 
 <how_to_work>
