@@ -177,6 +177,27 @@ describe("Agent Loop", () => {
     expect(db.getAgentState()).toBe("sleeping");
   });
 
+  it("a future sleep survives a restart without spending a turn", async () => {
+    const until = new Date(Date.now() + 3_600_000).toISOString();
+    db.setKV("sleep_until", until);
+    const inference = new MockInferenceClient([noToolResponse("Should not run.")]);
+
+    await runAgentLoop({ identity, config, db, conway, inference });
+
+    expect(db.getAgentState()).toBe("sleeping");
+    expect(db.getKV("sleep_until")).toBe(until);
+    expect(inference.calls.length).toBe(0);
+  });
+
+  it("a past sleep_until is cleared on startup", async () => {
+    db.setKV("sleep_until", new Date(Date.now() - 60_000).toISOString());
+    const inference = new MockInferenceClient([noToolResponse("Awake.")]);
+
+    await runAgentLoop({ identity, config, db, conway, inference });
+
+    expect(inference.calls.length).toBe(1);
+  });
+
   it("inbox messages cause pendingInput injection", async () => {
     // Insert an inbox message before running the loop
     db.insertInboxMessage({

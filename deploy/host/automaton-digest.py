@@ -77,7 +77,15 @@ def main(dry: bool, standup: bool = False) -> int:
         spend = con.execute("SELECT COALESCE(SUM(cost_cents),0) FROM inference_costs WHERE created_at >= ?",
                             (since_iso.replace("T", " "),)).fetchone()[0]
         revenue = con.execute("SELECT COALESCE(SUM(actual_revenue_cents),0) FROM goals").fetchone()[0]
+        # The heartbeat ticks every minute inside the runtime, asleep or awake; if it is
+        # silent the runtime is down even when the container says "running".
+        beat = con.execute("SELECT MAX(started_at) FROM heartbeat_history").fetchone()[0]
+        sleep_until = kv(con, "sleep_until")
         con.close()
+        if running and (not beat or now - datetime.fromisoformat(beat.replace("Z", "+00:00")).timestamp() > 1800):
+            needs.append(f"Agent runtime looks down: no heartbeat since {str(beat)[:16].replace('T', ' ')} UTC (container up).")
+        if state == "sleeping" and sleep_until:
+            state = f"sleeping until {sleep_until[11:16]} UTC"
         lines.append(f"State: {state} · {turns} turns {win} · last turn {str(last)[:16].replace('T', ' ')} UTC")
         if turns == 0:
             needs.append("No agent turns " + ("overnight." if standup else "in the last 24 hours."))

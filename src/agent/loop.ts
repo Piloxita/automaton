@@ -392,9 +392,14 @@ export async function runAgentLoop(
   let drained = 0;
   while (consumeNextWakeEvent(db.raw)) drained++;
 
-  // Clear any stale sleep_until from a previous session so the agent
-  // doesn't immediately go back to sleep on startup.
-  db.deleteKV("sleep_until");
+  // Clear a stale (past) sleep_until from a previous session so the agent
+  // doesn't immediately go back to sleep on startup. A sleep still in the
+  // future survives a restart (redeploys must not cut the agent's sleep short);
+  // the check at the top of the loop puts it straight back to sleep.
+  const pendingSleep = db.getKV("sleep_until");
+  if (!pendingSleep || !(new Date(pendingSleep).getTime() > Date.now())) {
+    db.deleteKV("sleep_until");
+  }
 
   // Transition to waking state
   db.setAgentState("waking");
