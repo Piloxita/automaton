@@ -28,8 +28,18 @@ CACHE = HOME / ".cache/automaton-advisor"
 LOG = HOME / ".local/state/automaton/advisor.jsonl"
 PY = HOME / "Projects/piloxita-master-bot/.venv/bin/python"
 REPO = HOME / "Projects/automaton"
-DENY = re.compile(r"referral|candidate|person-a|employer|laptop|tail\d{4,}|org-b|surname|"
-                  r"sk-ant-|sk-or-|-----BEGIN|0x[0-9a-fA-F]{64}|/\.config/|password|\btoken\b", re.I)
+PRIVATE_TERMS = Path.home() / ".config/automaton-creator/private-terms.txt"
+
+
+def private_terms() -> str:
+    """Private words to block, kept off git; fail closed if the file is missing."""
+    terms = [t.strip() for t in PRIVATE_TERMS.read_text().splitlines() if t.strip() and not t.startswith("#")]
+    if not terms:
+        raise SystemExit(f"{PRIVATE_TERMS} is empty")
+    return "|".join(terms)
+
+
+DENY = re.compile(private_terms() + r"|sk-ant-|sk-or-|-----BEGIN|0x[0-9a-fA-F]{64}|/\.config/|password|\btoken\b", re.I)
 
 
 def activity(hours: int = 7) -> str:
@@ -94,7 +104,7 @@ people, other projects, bots, accounts, paths outside the agent's workspace, or 
 
 
 def post(text: str) -> None:
-    subprocess.run([str(PY), "-c", "import sys; sys.path.insert(0, '/home/piloxita/Projects/piloxita-master-bot')\n"
+    subprocess.run([str(PY), "-c", "import sys; import os; sys.path.insert(0, os.path.expanduser('~/Projects/piloxita-master-bot'))\n"
                     "from pmb import botchat; botchat.post('master', 'automaton', sys.stdin.read())"],
                    input=text, text=True, check=True, timeout=30)
 

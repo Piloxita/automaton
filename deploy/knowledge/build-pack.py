@@ -17,11 +17,22 @@ KB = Path.home() / "kb"
 HERE = Path(__file__).resolve().parent
 OUT = Path.home() / ".local/share/automaton-knowledge"
 
+PRIVATE_TERMS = Path.home() / ".config/automaton-creator/private-terms.txt"
+
+
+def private_terms() -> str:
+    """Private words to block, kept off git; fail closed if the file is missing."""
+    terms = [t.strip() for t in PRIVATE_TERMS.read_text().splitlines() if t.strip() and not t.startswith("#")]
+    if not terms:
+        raise SystemExit(f"{PRIVATE_TERMS} is empty")
+    return "|".join(terms)
+
+
 DROP_LINE = re.compile(
-    r"referral|candidate|person-a|secretary|facebook|org-c|tailnet|tailscale|laptop|"
+    private_terms() + r"|facebook|tailnet|tailscale|"
     r"\bowner'?s (personal|channel|profile|login)|salary|password|bitwarden|\.config/|/home/|~/|tắt máy|suno|telegram|piloxita hub|\bthe hub\b|vpn",
     re.I)
-DENY = re.compile(r"referral|candidate|person-a|employer|laptop|tail\d{4,}|org-b|surname", re.I)
+DENY = re.compile(private_terms(), re.I)
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
 PHONE = re.compile(r"(?<![\w-])(?:\+\d{2}|0)\d{2}[ .]?\d{3}[ .]?\d{3,4}(?!\d)")
 

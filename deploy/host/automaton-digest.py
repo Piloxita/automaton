@@ -11,6 +11,7 @@ the evening digest and leaves the evening wallet baseline alone).
   automaton-digest.py [--standup] [--dry-run]
 """
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -162,7 +163,7 @@ def main(dry: bool, standup: bool = False) -> int:
     title = "☀️ Automaton standup" if standup else "🤖 Automaton daily"
     head = f"{title} · {datetime.now().strftime('%a %d %b')}"
     tail = ["", "⚠️ Needs you:"] + [f"  · {n}" for n in needs] if needs else ["", "✅ No action needed."]
-    text = "\n".join([head, ""] + lines + tail + ["", "Hub: http://laptop/#/automaton"])
+    text = "\n".join([head, ""] + lines + tail + ["", "Hub: " + os.environ.get("AUTOMATON_HUB_URL", "http://127.0.0.1:8765/#/automaton")])
 
     if dry:
         print(text)

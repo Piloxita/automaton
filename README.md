@@ -1,3 +1,25 @@
+# This fork: a hardened, self-hosted automaton
+
+A fork of [Conway-Research/automaton](https://github.com/Conway-Research/automaton) that we read before running, then hardened so it can live on an ordinary laptop. Experiment in progress: can an AI agent earn more than it costs? Original README below.
+
+**What we found in the original**
+- Spending caps were mostly on paper: the financial policy rules returned "no objection".
+- Messages from strangers on the public social relay got the same authority as the agent's creator.
+- Without a paid Conway VM, the agent's shell ran directly on the host, next to your files and keys.
+- Conway's account provisioning for new users is broken (upstream issues #372, #376, #406), so a fresh agent could not start.
+
+**What this fork changes**
+- **Sandboxed shell:** a bubblewrap jail with its own network namespace: no host files, keys or localhost services; the internet still works.
+- **SpendGuard:** one check on every money path (x402, top-ups, transfers, child funding, gas): per-payment, hourly and daily caps, a minimum reserve, deny when the balance is unknown.
+- **Authority tiers:** stranger messages get the lowest tier: no spending, shell, installs or self-edits.
+- **Contained mode:** the whole agent runs in a rootless podman container and may edit its own code there; a build that crashes three times within two minutes rolls back to the last version that stayed up ten minutes. The wallet balance is the real spending ceiling, so fund it in small amounts.
+- **Self-hosted mode:** no Conway at all. Inference through a host-side relay (tools off, hourly call cap), public endpoints through Cloudflare quick tunnels, incoming x402 payments settled through a public facilitator.
+- **Operations:** a host supervisor, a periodic read-only advisor, daily digests to the owner (`deploy/`).
+
+Status: running since October 2026, no paying customer yet. Milestones: a first paid call, then covering its own costs.
+
+---
+
 # Automaton: Self-Improving, Self-Replicating, Sovereign AI
 
 *The first AI that can earn its own existence, replicate, and evolve — without needing a human.*
