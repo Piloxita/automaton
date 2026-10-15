@@ -5,7 +5,8 @@ their own machine. This folder is a curated, read-only selection of their notes,
 shared so you can find paid services that build on proven know-how instead of
 guessing. It is refreshed daily.
 
-Start with `creator-capabilities.md`, then skim:
+Start with `strategy.md` (how to pick ideas that can actually earn) and
+`creator-capabilities.md`, then skim:
 - `topics/`: what we know about a subject (video tools, transcription, web design)
 - `trials/`: one note per tool we tried, with a verdict (adopted / rejected / parked) and gotchas
 - `sources/`: our summaries of articles and videos we studied

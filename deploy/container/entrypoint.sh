@@ -7,7 +7,10 @@
 set -u
 cd /app
 pid=""
-trap 'echo "[supervisor] stopping"; [ -n "$pid" ] && kill -TERM "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; exit 0' TERM INT
+# The agent's own long-running services (workspace/services.json) and their tunnels.
+( while true; do node /app/deploy/container/services-runner.mjs; echo "[supervisor] services runner exited, restarting"; sleep 5; done ) &
+svc=$!
+trap 'echo "[supervisor] stopping"; kill -TERM "$svc" 2>/dev/null; pkill -TERM -f services-runner.mjs 2>/dev/null; [ -n "$pid" ] && kill -TERM "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; exit 0' TERM INT
 fast_crashes=0
 while true; do
   start=$(date +%s)

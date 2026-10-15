@@ -42,3 +42,24 @@ describe("isProtectedFile in the contained profile", () => {
     expect(isProtectedFile(path.join(repo, "src/agent/tools.ts"), repo, false)).toBe(true);
   });
 });
+
+describe("kill rule", () => {
+  it("blocks killing the runtime outside the container but allows killing the agent's own services", async () => {
+    const { getForbiddenCommandMatch } = await import("../agent/policy-rules/command-safety.js");
+    expect(getForbiddenCommandMatch("kill -9 automaton", false)).not.toBeNull();
+    expect(getForbiddenCommandMatch('pkill -f "dist/index.js --run"', false)).not.toBeNull();
+    expect(getForbiddenCommandMatch("pkill -f /root/.automaton/workspace/api/server.js", false)).toBeNull();
+    // inside the creator's container, restarting the runtime is how a self-edit is applied
+    expect(getForbiddenCommandMatch('pkill -f "dist/index.js --run"', true)).toBeNull();
+  });
+});
+
+describe("rm rule", () => {
+  it("protects the state dir and vital files but lets the agent clean its workspace", async () => {
+    const { getForbiddenCommandMatch } = await import("../agent/policy-rules/command-safety.js");
+    expect(getForbiddenCommandMatch("rm -rf /root/.automaton", false)).not.toBeNull();
+    expect(getForbiddenCommandMatch("rm -rf ~/.automaton/", false)).not.toBeNull();
+    expect(getForbiddenCommandMatch("rm /root/.automaton/state.db", false)).not.toBeNull();
+    expect(getForbiddenCommandMatch("rm -f /root/.automaton/workspace/tmp/out.json", false)).toBeNull();
+  });
+});

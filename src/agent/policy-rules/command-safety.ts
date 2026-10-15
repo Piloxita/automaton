@@ -8,6 +8,7 @@
  */
 
 import type { PolicyRule, PolicyRequest, PolicyRuleResult } from "../../types.js";
+import { isContainedProfile } from "../../self-mod/code.js";
 
 // Shell metacharacters that could enable injection when interpolated
 const SHELL_METACHAR_RE = /[;|&$`\n(){}<>]/;
@@ -37,15 +38,18 @@ const SHELL_FIELDS: Record<string, string[]> = {
 // Forbidden command patterns (migrated from tools.ts isForbiddenCommand)
 const FORBIDDEN_COMMAND_PATTERNS: { pattern: RegExp; description: string }[] = [
   // Self-destruction
-  { pattern: /rm\s+(-rf?\s+)?.*\.automaton/, description: "Delete .automaton directory" },
+  // The state dir itself or its vital files; files the agent made in workspace/ are its own to delete.
+  { pattern: /\brm\s+[^|;&]*\.automaton\/?(\*)?(\s|$|[|;&])/, description: "Delete .automaton directory" },
+  { pattern: /\brm\s+[^|;&]*\.automaton\/(state\.db|wallet\.json|constitution\.md|SOUL\.md|\.git)\b/, description: "Delete .automaton directory" },
   { pattern: /rm\s+(-rf?\s+)?.*state\.db/, description: "Delete state database" },
   { pattern: /rm\s+(-rf?\s+)?.*wallet\.json/, description: "Delete wallet" },
   { pattern: /rm\s+(-rf?\s+)?.*automaton\.json/, description: "Delete config" },
   { pattern: /rm\s+(-rf?\s+)?.*heartbeat\.yml/, description: "Delete heartbeat config" },
   { pattern: /rm\s+(-rf?\s+)?.*SOUL\.md/, description: "Delete SOUL.md" },
   // Process killing
-  { pattern: /kill\s+.*automaton/, description: "Kill automaton process" },
-  { pattern: /pkill\s+.*automaton/, description: "Kill automaton process" },
+  // Only the runtime itself, not any command line that mentions an automaton path
+  // (e.g. `pkill -f /root/.automaton/workspace/app/server.js` is fine).
+  { pattern: /\b(kill|pkill|killall)\b[^|;&]*(dist\/index\.js|automaton --run|conway-automaton|(?<![\w./-])automaton(?![\w./-]))/, description: "Kill automaton process" },
   { pattern: /systemctl\s+(stop|disable)\s+automaton/, description: "Stop automaton service" },
   // Database destruction
   { pattern: /DROP\s+TABLE/i, description: "Drop database table" },
@@ -75,8 +79,14 @@ const FORBIDDEN_COMMAND_PATTERNS: { pattern: RegExp; description: string }[] = [
   { pattern: />\s*.*policy-rules/, description: "Overwrite policy rules" },
 ];
 
-export function getForbiddenCommandMatch(command: string): { description: string; pattern: string } | null {
+export function getForbiddenCommandMatch(
+  command: string,
+  contained: boolean = isContainedProfile(),
+): { description: string; pattern: string } | null {
   for (const { pattern, description } of FORBIDDEN_COMMAND_PATTERNS) {
+    // In the creator's container the supervisor restarts the runtime, and
+    // restarting is how a tested self-edit is applied.
+    if (contained && description === "Kill automaton process") continue;
     if (pattern.test(command)) {
       return { description, pattern: pattern.source };
     }

@@ -90,6 +90,11 @@ export interface AutomatonConfig {
    * "isolated" if pasta is on PATH, else "none".
    */
   localExecNetwork?: "isolated" | "none" | "host";
+  /**
+   * Goal orchestration (planner + sub-agent workers). Default: on in Conway
+   * mode, off in self-hosted mode, where the agent works directly.
+   */
+  orchestration?: boolean;
   /** Git URL of the upstream repo (set by the creator only). Unset = pull_upstream, reset_to_upstream and child spawning are disabled. */
   upstreamRepoUrl?: string;
   /** Branch or tag to track in upstreamRepoUrl. Default "main". */

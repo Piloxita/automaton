@@ -100,7 +100,8 @@ export async function runAgentLoop(
   const { identity, config, db, conway, inference, social, skills, policyEngine, spendTracker, onStateChange, onTurnComplete, ollamaBaseUrl } =
     options;
 
-  const builtinTools = createBuiltinTools(identity.sandboxId, config.hostingMode);
+  const orchestrationOn = config.orchestration ?? !isSelfHosted(config);
+  const builtinTools = createBuiltinTools(identity.sandboxId, config.hostingMode, orchestrationOn);
   const installedTools = loadInstalledTools(db);
   const tools = [...builtinTools, ...installedTools];
   const toolContext: ToolContext = {
@@ -136,7 +137,7 @@ export async function runAgentLoop(
   let orchestrator: Orchestrator | undefined;
   let workerPool: LocalWorkerPool | undefined;
 
-  if (hasTable(db.raw, "goals")) {
+  if (orchestrationOn && hasTable(db.raw, "goals")) {
     try {
       planModeController = new PlanModeController(db.raw);
 

@@ -177,6 +177,7 @@ function createCheckBalanceTool(): AutomatonTool {
 export function createBuiltinTools(
   sandboxId: string,
   hostingMode: "conway" | "selfhosted" = "conway",
+  orchestration: boolean = hostingMode !== "selfhosted",
 ): AutomatonTool[] {
   const tools: AutomatonTool[] = [
     // ── VM/Sandbox Tools ──
@@ -2245,10 +2246,14 @@ Model: ${ctx.inference.getDefaultModel()}
           const { modelRegistryGet } = await import("../state/database.js");
           const entry = modelRegistryGet(ctx.db.raw, modelId);
           if (!entry) {
-            return `Model '${modelId}' not found in registry. Use list_models to see available models.`;
+            const usable = (ctx.config.openaiCompatible?.models ?? []).map((m) => m.id);
+            return `Model '${modelId}' not found in registry.` +
+              (usable.length ? ` Usable models: ${[...new Set(usable)].join(", ")}.` : " Use list_models to see available models.");
           }
           if (!entry.enabled) {
-            return `Model '${modelId}' is disabled in the registry.`;
+            const usable = (ctx.config.openaiCompatible?.models ?? []).map((m) => m.id);
+            return `Model '${modelId}' is disabled in the registry.` +
+              (usable.length ? ` Usable models: ${[...new Set(usable)].join(", ")}.` : "");
           }
         } catch {
           // Registry not available, allow anyway
@@ -3397,9 +3402,10 @@ Model: ${ctx.inference.getDefaultModel()}
     },
   ];
 
-  if (hostingMode !== "selfhosted") return tools;
+  const base = orchestration ? tools : tools.filter((t) => t.category !== ("orchestration" as ToolCategory));
+  if (hostingMode !== "selfhosted") return base;
 
-  const filtered = tools.filter((t) => !HIDDEN_IN_SELFHOSTED.has(t.name));
+  const filtered = base.filter((t) => !HIDDEN_IN_SELFHOSTED.has(t.name));
   filtered.push(createCheckBalanceTool());
   return filtered;
 }

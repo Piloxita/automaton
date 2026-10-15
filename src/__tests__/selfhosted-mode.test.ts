@@ -464,8 +464,12 @@ describe("createBuiltinTools — self-hosted tool visibility", () => {
     expect(names.has("check_balance")).toBe(true);
     // x402_fetch stays available (governed by the existing domain allowlist).
     expect(names.has("x402_fetch")).toBe(true);
-    // Orchestration still works via the local worker pool.
-    expect(names.has("create_goal")).toBe(true);
+    // Self-hosted works directly by default: orchestration tools are hidden...
+    expect(names.has("create_goal")).toBe(false);
+    expect(names.has("orchestrator_status")).toBe(false);
+    // ...unless the creator turns orchestration back on.
+    const withOrch = new Set(createBuiltinTools("test-sandbox", "selfhosted", true).map((t) => t.name));
+    expect(withOrch.has("create_goal")).toBe(true);
   });
 
   it("conway mode (default) is unchanged — every tool is still present", () => {
