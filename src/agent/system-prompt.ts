@@ -12,6 +12,7 @@ import type Database from "better-sqlite3";
 import { createLogger } from "../observability/logger.js";
 
 const logger = createLogger("prompt");
+const CREATOR_NOTES_FILE = "/root/knowledge/from-creator.md";
 import type {
   AutomatonConfig,
   AutomatonIdentity,
@@ -720,6 +721,15 @@ Your chain type is ${chainType}.`,
 
   // Layer 6: Operational Context
   sections.push(selfHosted ? SELFHOSTED_OPERATIONAL_CONTEXT : OPERATIONAL_CONTEXT);
+  if (selfHosted) {
+    const note = latestCreatorNote();
+    if (note) {
+      sections.push(
+        `--- LATEST NOTE FROM YOUR CREATOR (via /root/knowledge/from-creator.md) ---\n${note}\n` +
+          `Act on it if it changes your priorities; record what you did in your kb journal.\n--- END CREATOR NOTE ---`,
+      );
+    }
+  }
 
   // Layer 7: Dynamic Context
   const turnCount = db.getTurnCount();
@@ -934,4 +944,20 @@ function selfhostedBalanceText(financial: { creditsCents: number; usdcBalance: n
   const usdcCents = Math.round(financial.usdcBalance * 100);
   const prepaidCents = Math.max(0, financial.creditsCents - usdcCents);
   return `${financial.usdcBalance.toFixed(2)} USDC in your wallet (spendable; revenue lands here; 0 is expected until you earn) + a $${(prepaidCents / 100).toFixed(2)} daily thinking budget from your creator (renews every day at 00:00 UTC, unused budget does not carry over, covers only your own thinking). You will not run out of budget by working; idle days are wasted days.`;
+}
+
+
+/**
+ * The newest entry of the creator's notes file (read-only mount, written on
+ * the host by the creator's operator). Entries start with "## YYYY-MM-DD".
+ */
+export function latestCreatorNote(file: string = CREATOR_NOTES_FILE): string | null {
+  try {
+    const text = fs.readFileSync(file, "utf-8");
+    const parts = text.split(/^(?=## )/m).filter((p) => p.startsWith("## "));
+    const last = parts[parts.length - 1]?.trim();
+    return last ? last.slice(0, 2000) : null;
+  } catch {
+    return null;
+  }
 }

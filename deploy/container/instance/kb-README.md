@@ -17,6 +17,9 @@ repeating mistakes and how your creator sees your reasoning.
   rather than duplicating.
 - `market/<slug>.md`: research on demand, competitors, prices, where customers are.
 
+- `needs-creator.md`: anything only your creator can provide (money, a domain,
+  an account, a decision). It appears in their evening digest. Clear it once handled.
+
 ## Rules
 - Update the relevant note in the same turn as the event, then append the
   journal line. Prefer editing a note over creating a new one.

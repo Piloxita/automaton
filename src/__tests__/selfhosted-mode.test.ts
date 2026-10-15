@@ -653,3 +653,16 @@ describe("relay allowance and unix transport", () => {
     }
   });
 });
+
+describe("creator notes", () => {
+  it("returns only the newest dated entry", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "notes-")), "from-creator.md");
+    fs.writeFileSync(f, "# Notes\n\n## 2026-10-14\nold idea\n\n## 2026-10-15\nfocus on VN gold prices\n");
+    const { latestCreatorNote } = await import("../agent/system-prompt.js");
+    expect(latestCreatorNote(f)).toBe("## 2026-10-15\nfocus on VN gold prices");
+    expect(latestCreatorNote(path.join(path.dirname(f), "missing.md"))).toBeNull();
+  });
+});

@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# automaton-note "text" — add a dated note from the creator to the agent's read-only
+# knowledge (from-creator.md, outside the public repo) and rebuild the pack. The agent
+# sees the newest note in its prompt on its next turn.
+set -euo pipefail
+[ $# -ge 1 ] && [ -n "$1" ] || { echo 'usage: automaton-note "text"' >&2; exit 2; }
+F="$HOME/.config/automaton-creator/knowledge/from-creator.md"
+[ -f "$F" ] || printf '# Notes from your creator\n\nNewest last. Each entry is a decision, a priority or an idea from your creator.\n' > "$F"
+printf '\n## %s\n%s\n' "$(date '+%Y-%m-%d %H:%M')" "$1" >> "$F"
+python3 "$HOME/Projects/automaton/deploy/knowledge/build-pack.py"
