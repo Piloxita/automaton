@@ -202,7 +202,7 @@ class Handler(BaseHTTPRequestHandler):
                 limited_until = time.time() + 30 * 60
                 log({"status": "limited", "model": model, "secs": secs})
                 return self.error(429, "subscription usage limit reached: " + result[:200])
-            log({"status": "error", "model": model, "secs": secs, "rc": p.returncode})
+            log({"status": "error", "model": model, "secs": secs, "rc": p.returncode, "detail": result[:200]})
             return self.error(502, "claude failed: " + result[:300])
 
         content, tool_calls = parse_reply(result, tool_names)
