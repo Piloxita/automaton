@@ -1,0 +1,9 @@
+[Unit]
+Description=Daily rebuild of the automaton knowledge pack
+
+[Timer]
+OnCalendar=*-*-* 23:40
+Persistent=true
+
+[Install]
+WantedBy=timers.target

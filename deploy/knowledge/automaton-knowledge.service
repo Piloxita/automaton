@@ -1,0 +1,6 @@
+[Unit]
+Description=Rebuild the automaton's read-only knowledge pack from ~/kb
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/Projects/automaton/deploy/knowledge/build-pack.py

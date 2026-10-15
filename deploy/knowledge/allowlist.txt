@@ -1,0 +1,18 @@
+# kb notes the agent may read (relative to ~/kb). Curated by hand: only notes
+# about tools, techniques and lessons that could help it build paid services.
+# Never add: finance, career, bots, referral, secretary, laptop/network, backups.
+topics/ai-video-tools.md
+topics/jizura-music-video.md
+topics/web-design.md
+topics/youtube-transcription.md
+trials/faster-whisper.md
+trials/youtube-transcript-api.md
+trials/youtube-captions-yt-dlp.md
+trials/openmontage-pipeline.md
+trials/jizura.md
+trials/hypit.md
+trials/vi-voiceover-tts.md
+trials/playwright-webkit.md
+sources/hypit-ai-video.md
+sources/obsidian-ai-three-levels.md
+sources/openmontage.md

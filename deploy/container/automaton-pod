@@ -24,6 +24,12 @@ RUN_OPTS=(
 
 # Host-side Claude subscription relay (deploy/relay): only its socket dir is
 # mounted; no Claude credential ever enters the container.
+# Curated, scrubbed kb notes from the creator (deploy/knowledge), read-only.
+KNOWLEDGE_DIR="$HOME/.local/share/automaton-knowledge"
+if [ -d "$KNOWLEDGE_DIR" ]; then
+  RUN_OPTS+=(-v "$KNOWLEDGE_DIR:/root/knowledge:ro")
+fi
+
 RELAY_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/automaton-relay"
 if [ -d "$RELAY_DIR" ]; then
   RUN_OPTS+=(-v "$RELAY_DIR:/run/relay")
