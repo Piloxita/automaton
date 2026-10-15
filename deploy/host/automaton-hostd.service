@@ -6,6 +6,8 @@ Environment=PATH=/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/bin/python3 %h/Projects/automaton/deploy/host/automaton-hostd.py
 Restart=on-failure
 RestartSec=5
+# Containers it starts keep their conmon in this cgroup: restarting the helper must not kill them.
+KillMode=process
 
 [Install]
 WantedBy=default.target

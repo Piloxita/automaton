@@ -42,7 +42,7 @@ def write_json(path: Path, obj) -> None:
 
 
 def inspect() -> dict | None:
-    rc, out = run("podman", "inspect", CONTAINER)
+    rc, out = run("podman", "inspect", "--type", "container", CONTAINER)
     if rc != 0:
         return None
     try:
