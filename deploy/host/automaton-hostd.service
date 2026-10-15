@@ -1,0 +1,11 @@
+[Unit]
+Description=Automaton host helper (container status + start/stop requests for the Hub)
+
+[Service]
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/python3 %h/Projects/automaton/deploy/host/automaton-hostd.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
