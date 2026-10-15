@@ -544,6 +544,9 @@ export class Orchestrator {
           this.params.db.prepare(
             "UPDATE task_graph SET status = 'pending', assigned_to = NULL, started_at = NULL WHERE id = ?",
           ).run(task.id);
+          // Mark the worker dead too, or the idle-agent query hands the task
+          // straight back to it and the task loops between assigned and pending.
+          this.params.agentTracker.updateStatus(task.assignedTo!, "dead");
         }
       }
     }
