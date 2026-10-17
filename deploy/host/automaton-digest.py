@@ -115,6 +115,8 @@ def main(dry: bool, standup: bool = False) -> int:
     except OSError:
         pass
     lines.append(f"Relay: {calls} calls {win}" + (f" · {limited} limit hits" if limited else "") + (f" · {errors} errors" if errors else ""))
+    if errors >= 10:
+        needs.append(f"The relay failed {errors} calls {win} (check ~/.local/state/automaton-relay/log.jsonl).")
     if limited:
         needs.append(f"The second Claude account hit its usage limit {limited}x " + ("overnight." if standup else "today."))
 
