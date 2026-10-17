@@ -159,8 +159,10 @@ def main(dry: bool, standup: bool = False) -> int:
 
     # the agent's own asks
     ask = KB / "needs-creator.md"
-    if ask.is_file() and ask.read_text(errors="replace").strip():
-        needs.append("The agent asks: " + ask.read_text(errors="replace").strip()[:600])
+    # Only real requests count: each one is a "## ..." section; a header or an operator remark alone is not an ask.
+    ask_text = ask.read_text(errors="replace") if ask.is_file() else ""
+    if re.search(r"^##\s", ask_text, re.M):
+        needs.append("The agent asks: " + ask_text.strip()[:600])
 
     title = "☀️ Automaton standup" if standup else "🤖 Automaton daily"
     head = f"{title} · {datetime.now().strftime('%a %d %b')}"
