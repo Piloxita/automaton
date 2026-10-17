@@ -118,7 +118,7 @@ def main(dry: bool, standup: bool = False) -> int:
     if errors >= 10:
         needs.append(f"The relay failed {errors} calls {win} (check ~/.local/state/automaton-relay/log.jsonl).")
     if limited:
-        needs.append(f"The second Claude account hit its usage limit {limited}x " + ("overnight." if standup else "today."))
+        needs.append(f"The Claude account hit its usage limit {limited}x " + ("overnight." if standup else "today."))
 
     # services
     try:
